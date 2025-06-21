@@ -1,7 +1,7 @@
 <script setup>
 import { computed, h, watch } from 'vue';
 import { useDataStore } from '../stores/data';
-import { NSelect, NDataTable, NSpace, NH2, NTag, NEmpty } from 'naive-ui';
+import { NSelect, NDataTable, NSpace, NH2, NTag, NEmpty, NInputNumber, NFlex, NText } from 'naive-ui';
 
 const dataStore = useDataStore();
 const selectedCampusId = computed({
@@ -42,22 +42,55 @@ const columns = computed(() => {
         cellProps: () => ({
             style: {
                 verticalAlign: 'top',
-                paddingTop: '12px'
+                padding: '8px' // 调整内边距
             }
         }),
         render(row) {
             const schedulesInCell = row[day.id];
-            return h(NSpace, { vertical: true, size: 'small' }, {
-                default: () => schedulesInCell.map(({ schedule, teacher }) => {
-                    const course = dataStore.courses.find(c => c.id === schedule.course_id);
-                    const venue = dataStore.campuses.find(c => c.id === schedule.campus_id)
-                        ?.venues.find(v => v.id === schedule.venue_id);
-                    return h('div', { style: 'text-align: left; padding: 4px; border-radius: 4px; background-color: #e6f7ff; border: 1px solid #91d5ff;' }, [
-                        h('div', { style: 'font-weight: bold;' }, `${course?.name || '未知'}`),
-                        h('div', `${teacher?.name || '未知'} - ${venue?.name || '未知'}`)
-                    ]);
-                })
+            const actualCount = schedulesInCell.length;
+            const timeId = row.key;
+            const dayId = day.id;
+
+            const expectedCount = dataStore.getExpectedCountForCampusCell(selectedCampusId.value, dayId, timeId);
+            const isOverbooked = actualCount > expectedCount && expectedCount > 0;
+
+            const counterNode = h(NFlex, { align: 'center', style: 'margin-bottom: 8px;'}, {
+                default: () => [
+                    h(NText, { depth: 3, style: 'font-size: 12px;' }, { default: () => '期望:' }),
+                    h(NInputNumber, {
+                        value: expectedCount,
+                        'onUpdate:value': (value) => {
+                            dataStore.updateCampusScheduleDensity(selectedCampusId.value, dayId, timeId, value);
+                        },
+                        size: 'tiny',
+                        min: 0,
+                        style: 'width: 70px;',
+                    }),
+                    h(NText, {
+                        tag: 'span',
+                        style: {
+                            color: isOverbooked ? '#d03050' : 'inherit',
+                            fontWeight: 'normal',
+                            fontSize: '12px'
+                        }
+                    }, { default: () => `实际: ${actualCount}` })
+                ]
             });
+
+            const scheduleNodes = schedulesInCell.map(({ schedule, teacher }) => {
+                const course = dataStore.courses.find(c => c.id === schedule.course_id);
+                const venue = dataStore.campuses.find(c => c.id === schedule.campus_id)
+                    ?.venues.find(v => v.id === schedule.venue_id);
+                return h('div', { style: 'text-align: left; padding: 4px; border-radius: 4px; background-color: #e6f7ff; border: 1px solid #91d5ff; margin-top: 4px;' }, [
+                    h('div', { style: 'font-weight: bold;' }, `${course?.name || '未知'}`),
+                    h('div', `${teacher?.name || '未知'} - ${venue?.name || '未知'}`)
+                ]);
+            });
+
+            return h('div', null, [
+                counterNode,
+                ...scheduleNodes
+            ]);
         }
     }));
 

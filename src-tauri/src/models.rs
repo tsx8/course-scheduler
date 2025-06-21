@@ -28,6 +28,15 @@ pub struct Campus {
     pub id: String,
     pub name: String,
     pub venues: Vec<Venue>,
+    #[serde(default)]
+    pub schedule_density: Vec<ScheduleDensity>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ScheduleDensity {
+    pub day_id: String,
+    pub time_id: String,
+    pub count: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

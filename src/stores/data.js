@@ -76,7 +76,10 @@ export const useDataStore = defineStore('data', () => {
     const replaceAllData = (newData) => {
         teachers.value = newData.teachers || [];
         courses.value = newData.courses || [];
-        campuses.value = newData.campuses || [];
+        campuses.value = (newData.campuses || []).map(c => ({
+            ...c,
+            schedule_density: c.schedule_density || []
+        }));
         time.value = newData.time || [];
         day.value = newData.day || [];
     };
@@ -198,6 +201,42 @@ export const useDataStore = defineStore('data', () => {
             });
         }
     };
+
+    const updateCampusScheduleDensity = (campusId, dayId, timeId, count) => {
+        const campus = campuses.value.find(c => c.id === campusId);
+        if (!campus) return;
+
+        if (!Array.isArray(campus.schedule_density)) {
+            campus.schedule_density = [];
+        }
+
+        const densityIndex = campus.schedule_density.findIndex(
+            d => d.day_id === dayId && d.time_id === timeId
+        );
+
+        const newCount = Math.max(0, count || 0);
+
+        if (densityIndex !== -1) {
+            if (newCount === 0) {
+                campus.schedule_density.splice(densityIndex, 1);
+            } else {
+                campus.schedule_density[densityIndex].count = newCount;
+            }
+        } else if (newCount > 0) {
+            campus.schedule_density.push({ day_id: dayId, time_id: timeId, count: newCount });
+        }
+    };
+
+    const getExpectedCountForCampusCell = computed(() => (campusId, dayId, timeId) => {
+        const campus = campuses.value.find(c => c.id === campusId);
+        if (!campus || !campus.schedule_density) {
+            return 0;
+        }
+        const density = campus.schedule_density.find(
+            d => d.day_id === dayId && d.time_id === timeId
+        );
+        return density ? density.count : 0;
+    });
 
     const teacherOptions = computed(() => teachers.value.map(t => ({ label: t.name, value: t.id })));
 
@@ -416,5 +455,7 @@ export const useDataStore = defineStore('data', () => {
         addDay,
         updateDay,
         deleteDay,
+        getExpectedCountForCampusCell,
+        updateCampusScheduleDensity,
     };
 });

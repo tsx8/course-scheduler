@@ -200,18 +200,6 @@ const handleDaySubmit = () => {
         <n-layout-content content-style="padding: 24px;" style="height: calc(100vh - 156px); overflow: auto;"
             :native-scrollbar="false">
             <n-flex vertical :size="24">
-                <n-card title="数据管理">
-                    <n-flex vertical>
-                        <n-text>
-                            你可以将当前的所有数据（包括教师、课程、场地、课表等）导出为一个 JSON 文件进行备份，或从备份文件中恢复数据。
-                        </n-text>
-                        <n-flex>
-                            <n-button type="primary" @click="handleExportData">导出数据...</n-button>
-                            <n-button @click="handleImportData">导入数据...</n-button>
-                        </n-flex>
-                    </n-flex>
-                </n-card>
-
                 <n-card title="上课时间管理">
                     <n-flex vertical>
                         <n-text>管理课表中的时间段，例如“第一大节”、“第三大节”等。删除时间段会一并删除所有相关的排课记录。</n-text>
@@ -233,6 +221,18 @@ const handleDaySubmit = () => {
                         </n-button>
                         <n-data-table :columns="dayColumns" :data="dataStore.day" :bordered="true"
                             :single-line="false" />
+                    </n-flex>
+                </n-card>
+
+                <n-card title="数据管理">
+                    <n-flex vertical>
+                        <n-text>
+                            你可以将当前的所有数据（包括教师、课程、场地、课表等）导出为一个 JSON 文件进行备份，或从备份文件中恢复数据。
+                        </n-text>
+                        <n-flex>
+                            <n-button type="primary" @click="handleExportData">导出数据...</n-button>
+                            <n-button @click="handleImportData">导入数据...</n-button>
+                        </n-flex>
                     </n-flex>
                 </n-card>
             </n-flex>
