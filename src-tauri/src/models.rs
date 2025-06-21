@@ -55,9 +55,9 @@ pub struct Teacher {
     pub id: String,
     pub name: String,
     pub max_teaching_hours: u8,
-    pub is_coach: bool,
     pub is_only_shahe: bool,
-    pub is_leader: bool,
+    #[serde(default)]
+    pub unavailable: Vec<BlockedSlot>,
     pub teaches: Vec<String>,
     pub scheduled: Vec<ScheduledClass>,
 }
@@ -70,4 +70,10 @@ pub struct ScheduledClass {
     pub course_id: String,
     pub campus_id: String,
     pub venue_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BlockedSlot {
+    pub day_id: String,
+    pub time_id: String,
 }

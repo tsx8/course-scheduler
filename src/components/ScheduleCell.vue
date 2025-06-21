@@ -14,10 +14,23 @@
                 </n-button>
             </n-button-group>
         </div>
-        <div v-else class="add-schedule">
-            <n-button circle dashed type="primary" @click="handleAdd">
-                <template #icon><n-icon :component="AddIcon" /></template>
+
+        <div v-else-if="isBlocked" class="blocked-schedule">
+            <n-icon :component="BlockIcon" size="24" color="#a3a3a3" />
+            <n-button text type="error" @click="handleBlockToggle" class="unblock-button">
+                取消
             </n-button>
+        </div>
+
+        <div v-else class="add-schedule">
+            <n-button-group style="gap: 4px;">
+                <n-button circle dashed type="primary" @click="handleAdd" title="新增排课">
+                    <template #icon><n-icon :component="AddIcon" /></template>
+                </n-button>
+                <n-button circle dashed type="warning" @click="handleBlockToggle" title="设为不排课">
+                    <template #icon><n-icon :component="BlockIcon" /></template>
+                </n-button>
+            </n-button-group>
         </div>
 
         <n-modal v-model:show="showModal" preset="dialog" :title="modalTitle">
@@ -53,7 +66,8 @@ import {
 import {
     AddOutline as AddIcon,
     CreateOutline as EditIcon,
-    TrashOutline as DeleteIcon
+    TrashOutline as DeleteIcon,
+    BanOutline as BlockIcon,
 } from '@vicons/ionicons5';
 
 const props = defineProps({
@@ -66,15 +80,16 @@ const dataStore = useDataStore();
 const message = useMessage();
 const dialog = useDialog();
 
-// Component State
 const showModal = ref(false);
 const isEditMode = ref(false);
 const formRef = ref(null);
 const formValue = ref({});
 
-// Computed properties to get data from store
 const scheduleMap = computed(() => dataStore.getScheduleMapForTeacher(props.teacherId));
 const scheduleForCell = computed(() => scheduleMap.value.get(`${props.dayId}-${props.timeId}`));
+
+const unavailableSet = computed(() => dataStore.getUnavailableMapForTeacher(props.teacherId));
+const isBlocked = computed(() => unavailableSet.value.has(`${props.dayId}-${props.timeId}`));
 
 const courseName = computed(() => {
     const course = dataStore.courses.find(c => c.id === scheduleForCell.value?.course_id);
@@ -90,7 +105,6 @@ const venueName = computed(() => {
     return venue?.name || '未知场地';
 });
 
-// Modal-related computed properties
 const modalTitle = computed(() => (isEditMode.value ? '编辑排课' : '新增排课'));
 const courseOptions = computed(() => dataStore.teacherCourseOptions(props.teacherId));
 const campusOptionsForForm = computed(() => {
@@ -137,7 +151,16 @@ const handleDelete = () => {
     });
 };
 
+const handleBlockToggle = () => {
+    dataStore.toggleUnavailableSlot(props.teacherId, props.dayId, props.timeId);
+};
+
 const handleSubmit = () => {
+    if (isBlocked.value) {
+        message.error('此时间段已被设为不排课，无法添加课程。');
+        return;
+    }
+
     formRef.value?.validate((errors) => {
         if (!errors) {
             const scheduleData = {
@@ -212,5 +235,31 @@ const handleCampusChange = () => {
     align-items: center;
     justify-content: center;
     min-height: 60px;
+}
+
+.blocked-schedule {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 60px;
+    min-width: 100px;
+    background-color: #fafafa;
+    border: 1px dashed #d9d9d9;
+    border-radius: 4px;
+    position: relative;
+}
+
+.unblock-button {
+    position: absolute;
+    bottom: 2px;
+    right: 5px;
+    font-size: 12px;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.blocked-schedule:hover .unblock-button {
+    opacity: 1;
 }
 </style>

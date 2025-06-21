@@ -30,9 +30,7 @@
                     </n-form-item>
                     <n-form-item label="属性">
                         <n-space>
-                            <n-checkbox v-model:checked="currentTeacher.is_coach">是否教练</n-checkbox>
                             <n-checkbox v-model:checked="currentTeacher.is_only_shahe">仅沙河校区</n-checkbox>
-                            <n-checkbox v-model:checked="currentTeacher.is_leader">是否领导</n-checkbox>
                         </n-space>
                     </n-form-item>
                 </n-form>
@@ -69,9 +67,7 @@ const defaultTeacher = () => ({
     id: '',
     name: '',
     max_teaching_hours: 0,
-    is_coach: false,
     is_only_shahe: false,
-    is_leader: false,
     teaches: [],
 });
 
@@ -86,27 +82,6 @@ const createColumns = ({ onEdit, onDelete }) => [
     // { title: 'ID', key: 'id', ellipsis: { tooltip: true }, width: 150 },
     { title: '姓名', key: 'name', sorter: (a, b) => a.name.localeCompare(b.name) },
     { title: '最大学时', key: 'max_teaching_hours', sorter: (a, b) => a.max_teaching_hours - b.max_teaching_hours },
-    {
-        title: () =>
-            h('div', { style: 'display: flex; align-items: center;' }, [
-                '教练',
-                h(
-                    NTooltip,
-                    { trigger: 'hover' },
-                    {
-                        trigger: () =>
-                            h(
-                                NIcon,
-                                { size: 16, style: 'margin-left: 4px; cursor: pointer;' },
-                                { default: () => h(InformationCircleOutline) }
-                            ),
-                        default: () => '教练下午不排课',
-                    }
-                ),
-            ]),
-        key: 'is_coach',
-        render: (row) => (row.is_coach ? '是' : '否'),
-    },
     {
         title: () =>
             h('div', { style: 'display: flex; align-items: center;' }, [
@@ -127,27 +102,6 @@ const createColumns = ({ onEdit, onDelete }) => [
             ]),
         key: 'is_only_shahe',
         render: (row) => (row.is_only_shahe ? '是' : '否'),
-    },
-    {
-        title: () =>
-            h('div', { style: 'display: flex; align-items: center;' }, [
-                '领导',
-                h(
-                    NTooltip,
-                    { trigger: 'hover' },
-                    {
-                        trigger: () =>
-                            h(
-                                NIcon,
-                                { size: 16, style: 'margin-left: 4px; cursor: pointer;' },
-                                { default: () => h(InformationCircleOutline) }
-                            ),
-                        default: () => '领导周三上午不排课',
-                    }
-                ),
-            ]),
-        key: 'is_leader',
-        render: (row) => (row.is_leader ? '是' : '否'),
     },
     {
         title: '教学课程',

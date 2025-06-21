@@ -90,7 +90,7 @@ export const useDataStore = defineStore('data', () => {
 
     const addTeacher = (teacherData) => {
         const { id, ...data } = teacherData;
-        const newTeacher = { ...data, id: uuidv4(), scheduled: teacherData.scheduled || [] };
+        const newTeacher = { ...data, id: uuidv4(), scheduled: teacherData.scheduled || [], unavailable: teacherData.unavailable || [] };
         teachers.value.push(newTeacher);
     };
     const updateTeacher = (updatedTeacher) => {
@@ -214,6 +214,19 @@ export const useDataStore = defineStore('data', () => {
         return scheduleMap;
     });
 
+    const getUnavailableMapForTeacher = computed(() => (teacherId) => {
+        const teacher = teachers.value.find(t => t.id === teacherId);
+        if (!teacher || !teacher.unavailable) {
+            return new Set();
+        }
+        const unavailableSet = new Set();
+        teacher.unavailable.forEach(slot => {
+            const key = `${slot.day_id}-${slot.time_id}`;
+            unavailableSet.add(key);
+        });
+        return unavailableSet;
+    });
+
     const getScheduledClassesByCampus = computed(() => (campusId) => {
         const scheduleMap = new Map();
         teachers.value.forEach(teacher => {
@@ -293,6 +306,23 @@ export const useDataStore = defineStore('data', () => {
         }
     };
 
+    const toggleUnavailableSlot = (teacherId, dayId, timeId) => {
+        const teacher = teachers.value.find(t => t.id === teacherId);
+        if (!teacher) return;
+        if (!Array.isArray(teacher.unavailable)) {
+            teacher.unavailable = [];
+        }
+
+        const key = `${dayId}-${timeId}`;
+        const index = teacher.unavailable.findIndex(s => s.day_id === dayId && s.time_id === timeId);
+
+        if (index !== -1) {
+            teacher.unavailable.splice(index, 1);
+        } else {
+            teacher.unavailable.push({ day_id: dayId, time_id: timeId });
+        }
+    };
+
     const addTimeSlot = (timeSlotData) => {
         const { id, ...data } = timeSlotData;
         const newTimeSlot = { ...data, id: uuidv4() };
@@ -341,8 +371,11 @@ export const useDataStore = defineStore('data', () => {
         time,
         day,
         initializeData,
-        replaceAllData, 
+        replaceAllData,
         commitChanges,
+
+        getUnavailableMapForTeacher,
+        toggleUnavailableSlot,
 
         selectedCampusIdForCampusView,
         selectedTeacherIdForTeacherView,
