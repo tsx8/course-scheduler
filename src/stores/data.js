@@ -19,6 +19,7 @@ export const useDataStore = defineStore('data', () => {
     const courses = ref([]);
     const campuses = ref([]);
     const time = ref([]);
+    const isReverting = ref(false);
     const day = ref([]);
 
     const selectedCampusIdForCampusView = ref(null);
@@ -62,7 +63,7 @@ export const useDataStore = defineStore('data', () => {
                     day: day.value
                 }),
                 (newState) => {
-                    if (!isInitialized.value) return;
+                    if (!isInitialized.value || isReverting.value) return;
                     debouncedSave(newState);
                 },
                 { deep: true }
@@ -82,6 +83,25 @@ export const useDataStore = defineStore('data', () => {
         }));
         time.value = newData.time || [];
         day.value = newData.day || [];
+    };
+
+    const revertChanges = async () => {
+        console.log("Reverting changes...");
+        isReverting.value = true;
+        try {
+            await invoke('clear_temp_data');
+            console.log("Temp data cleared.");
+            const reloadedData = await invoke('load_data');
+            console.log("Data reloaded from source.");
+            replaceAllData(reloadedData);
+        } catch (error) {
+            console.error("Failed to revert changes:", error);
+            throw error;
+        } finally {
+            setTimeout(() => {
+                isReverting.value = false;
+            }, 0);
+        }
     };
 
     const courseOptions = computed(() => courses.value.map(c => ({ label: c.name, value: c.id })));
@@ -411,6 +431,7 @@ export const useDataStore = defineStore('data', () => {
         day,
         initializeData,
         replaceAllData,
+        revertChanges,
         commitChanges,
 
         getUnavailableMapForTeacher,

@@ -56,7 +56,8 @@ import {
     ResizeOutline as RestoreIcon,
     CloseSharp as CloseIcon,
     SettingsOutline as SettingsIcon,
-    SaveOutline as SaveIcon
+    SaveOutline as SaveIcon,
+    RefreshOutline as UndoIcon
 } from '@vicons/ionicons5';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { invoke } from '@tauri-apps/api/core';
@@ -134,6 +135,11 @@ const menuOptions = ref([
         icon: renderIcon(SaveIcon),
     },
     {
+        label: '撤销所有更改',
+        key: 'RevertChanges',
+        icon: renderIcon(UndoIcon),
+    },
+    {
         label: '设置',
         key: 'Settings',
         icon: renderIcon(SettingsIcon),
@@ -151,6 +157,24 @@ const handleMenuSelect = async (key) => {
             console.error("Save failed:", err);
             message.error(`保存失败: ${err}`);
         }
+        return;
+    }
+    if (key === 'RevertChanges') {
+        dialog.warning({
+            title: '确认撤销更改',
+            content: '确定要撤销所有未保存的更改吗？此操作将还原到上次保存的状态。',
+            positiveText: '确认',
+            negativeText: '取消',
+            onPositiveClick: async () => {
+                try {
+                    await dataStore.revertChanges();
+                    message.success('所有更改已成功撤销。');
+                } catch (err) {
+                    console.error("Revert failed:", err);
+                    message.error(`撤销失败: ${err}`);
+                }
+            }
+        });
         return;
     }
     router.push({ name: key });
