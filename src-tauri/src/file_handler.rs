@@ -80,10 +80,10 @@ pub async fn export_data(file_path: String, state: State<'_, AppState>) -> Comma
         async_fs::copy(path_to_export, Path::new(&file_path))
             .await
             .map_err(|e| e.to_string())?;
-    }
-    else {
+    } else {
         let default_data = AllData::default();
-        let json_content = serde_json::to_string_pretty(&default_data).map_err(|e| e.to_string())?;
+        let json_content =
+            serde_json::to_string_pretty(&default_data).map_err(|e| e.to_string())?;
         async_fs::write(Path::new(&file_path), json_content)
             .await
             .map_err(|e| e.to_string())?;

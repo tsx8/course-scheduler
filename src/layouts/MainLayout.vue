@@ -1,40 +1,45 @@
 <template>
-    <n-layout style="height: 100vh">
-        <n-layout-header data-tauri-drag-region="true"
-            style="height: 48px; padding: 0 12px 0 24px; display: flex; align-items: center; justify-content: space-between; user-select: none;"
-            bordered>
-            <h1 data-tauri-drag-region="true" style="font-size: 1.2em; margin: 0; color: #333; user-select: none;">
-                排课管理系统
-            </h1>
-            <div data-tauri-drag-region="false">
-                <n-button-group>
-                    <n-button quaternary size="small" @click="minimizeWindow" title="最小化">
-                        <template #icon><n-icon :component="MinimizeIcon" /></template>
-                    </n-button>
-                    <n-button quaternary size="small" @click="toggleMaximizeWindow" title="最大化/还原">
-                        <template #icon>
-                            <n-icon :component="isMaximized ? RestoreIcon : MaximizeIcon" /></template>
-                    </n-button>
-                    <n-button quaternary type="error" size="small" @click="appWindow.close()" title="关闭">
-                        <template #icon><n-icon :component="CloseIcon" /></template>
-                    </n-button>
-                </n-button-group>
-            </div>
-        </n-layout-header>
-        <n-layout has-sider>
-            <n-layout-sider bordered collapse-mode="width" show-trigger>
-                <n-menu :options="menuOptions" :value="activeMenuKey" @update:value="handleMenuSelect" />
-            </n-layout-sider>
-            <n-layout-content content-style="padding: 24px; display: flex; flex-direction: column;"
-                :native-scrollbar="false">
-                <router-view v-if="dataStore.isInitialized" />
-                <div v-else style="display: flex; justify-content: center; align-items: center; height: 100%;">
-                    <n-spin size="large" />
-                    <p style="margin-left: 12px;">正在加载数据...</p>
+    <n-spin :show="dataStore.isSolving" size="large">
+        <template #description>
+            正在排课中……
+        </template>
+        <n-layout style="height: 100vh">
+            <n-layout-header data-tauri-drag-region="true"
+                style="height: 48px; padding: 0 12px 0 24px; display: flex; align-items: center; justify-content: space-between; user-select: none;"
+                bordered>
+                <h1 data-tauri-drag-region="true" style="font-size: 1.2em; margin: 0; color: #333; user-select: none;">
+                    排课管理系统
+                </h1>
+                <div data-tauri-drag-region="false">
+                    <n-button-group>
+                        <n-button quaternary size="small" @click="minimizeWindow" title="最小化">
+                            <template #icon><n-icon :component="MinimizeIcon" /></template>
+                        </n-button>
+                        <n-button quaternary size="small" @click="toggleMaximizeWindow" title="最大化/还原">
+                            <template #icon>
+                                <n-icon :component="isMaximized ? RestoreIcon : MaximizeIcon" /></template>
+                        </n-button>
+                        <n-button quaternary type="error" size="small" @click="appWindow.close()" title="关闭">
+                            <template #icon><n-icon :component="CloseIcon" /></template>
+                        </n-button>
+                    </n-button-group>
                 </div>
-            </n-layout-content>
+            </n-layout-header>
+            <n-layout has-sider>
+                <n-layout-sider bordered collapse-mode="width" show-trigger>
+                    <n-menu :options="menuOptions" :value="activeMenuKey" @update:value="handleMenuSelect" />
+                </n-layout-sider>
+                <n-layout-content content-style="padding: 24px; display: flex; flex-direction: column;"
+                    :native-scrollbar="false">
+                    <router-view v-if="dataStore.isInitialized" />
+                    <div v-else style="display: flex; justify-content: center; align-items: center; height: 100%;">
+                        <n-spin size="large" />
+                        <p style="margin-left: 12px;">正在加载数据...</p>
+                    </div>
+                </n-layout-content>
+            </n-layout>
         </n-layout>
-    </n-layout>
+    </n-spin>
 </template>
 
 <script setup>
@@ -56,6 +61,7 @@ import {
     ResizeOutline as RestoreIcon,
     CloseSharp as CloseIcon,
     SettingsOutline as SettingsIcon,
+    RocketOutline as SolverIcon,
     SaveOutline as SaveIcon,
     RefreshOutline as UndoIcon
 } from '@vicons/ionicons5';
@@ -130,6 +136,11 @@ const menuOptions = ref([
         key: 'd2'
     },
     {
+        label: '自动排课',
+        key: 'AutoSchedule',
+        icon: renderIcon(SolverIcon),
+    },
+    {
         label: '保存更改',
         key: 'SaveChanges',
         icon: renderIcon(SaveIcon),
@@ -175,6 +186,25 @@ const handleMenuSelect = async (key) => {
                 }
             }
         });
+        return;
+    }
+    if (key === 'AutoSchedule') {
+        dataStore.isSolving = true;
+        try {
+            message.info('正在排课...');
+            const solvedData = await invoke('run_solver');
+            dataStore.replaceAllData(solvedData);
+            message.success('自动排课完成！新的课表已生成，请检查并保存。');
+        } catch (err) {
+            console.error("Solver failed:", err);
+            dialog.error({
+                title: '排课失败',
+                content: err,
+                positiveText: '好的'
+            });
+        } finally {
+            dataStore.isSolving = false;
+        }
         return;
     }
     router.push({ name: key });

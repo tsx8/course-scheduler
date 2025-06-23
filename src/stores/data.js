@@ -21,6 +21,7 @@ export const useDataStore = defineStore('data', () => {
     const time = ref([]);
     const isReverting = ref(false);
     const day = ref([]);
+    const isSolving = ref(false);
 
     const selectedCampusIdForCampusView = ref(null);
     const selectedTeacherIdForTeacherView = ref(null);
@@ -433,6 +434,7 @@ export const useDataStore = defineStore('data', () => {
 
     return {
         isInitialized,
+        isSolving,
         teachers,
         courses,
         campuses,

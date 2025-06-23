@@ -206,14 +206,14 @@ watch(() => dataStore.campuses, (newCampuses) => {
             <n-flex justify="space-between" align="center">
                 <n-h2 style="margin: 0;">校区总课表</n-h2>
                 <n-flex align="center">
+                    <n-select v-model:value="selectedCampusId" placeholder="请选择校区" :options="campusOptions" clearable
+                    style="width: 150px" />
+                    <n-select v-model:value="selectedVenueId" placeholder="选择场地" :options="venueOptions" clearable
+                    :disabled="!selectedCampusId" style="width: 150px" />
                     <n-button type="primary" @click="handleExportToCsv" :disabled="!selectedCampusId">
                         <template #icon><n-icon :component="ExportIcon" /></template>
                         导出CSV
                     </n-button>
-                    <n-select v-model:value="selectedCampusId" placeholder="请选择校区" :options="campusOptions" clearable
-                        style="width: 100px" />
-                    <n-select v-model:value="selectedVenueId" placeholder="选择场地" :options="venueOptions" clearable
-                        :disabled="!selectedCampusId" style="width: 150px" />
                 </n-flex>
             </n-flex>
         </n-layout-header>
