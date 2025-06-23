@@ -1,22 +1,37 @@
 <script setup>
 import { computed, h, watch } from 'vue';
 import { useDataStore } from '../stores/data';
-import { NSelect, NDataTable, NSpace, NH2, NTag, NEmpty, NInputNumber, NFlex, NText } from 'naive-ui';
+import { NSelect, NDataTable, NFlex, NH2, NEmpty, NInputNumber, NText, NButton, NIcon, useMessage } from 'naive-ui';
+import { DownloadOutline as ExportIcon } from '@vicons/ionicons5';
 
 const dataStore = useDataStore();
+const message = useMessage();
+
 const selectedCampusId = computed({
     get: () => dataStore.selectedCampusIdForCampusView,
     set: (val) => { dataStore.selectedCampusIdForCampusView = val; }
+});
+
+const selectedVenueId = computed({
+    get: () => dataStore.selectedVenueIdForCampusView,
+    set: (val) => { dataStore.selectedVenueIdForCampusView = val; }
 });
 
 const campusOptions = computed(() => dataStore.campusOptions);
 const timeSlots = computed(() => dataStore.time);
 const days = computed(() => dataStore.day);
 
-const scheduleMap = computed(() => {
-    if (!selectedCampusId.value) return new Map();
-    return dataStore.getScheduledClassesByCampus(selectedCampusId.value);
+const venueOptions = computed(() => {
+    if (!selectedCampusId.value) return [];
+    const venues = dataStore.venueOptionsByCampus(selectedCampusId.value);
+    return [{ label: '全部场地', value: null }, ...venues];
 });
+
+watch(selectedCampusId, () => {
+    selectedVenueId.value = null;
+});
+
+const scheduleMap = computed(() => dataStore.getScheduledClassesByCampus);
 
 const tableData = computed(() => {
     if (!selectedCampusId.value) return [];
@@ -42,11 +57,23 @@ const columns = computed(() => {
         cellProps: () => ({
             style: {
                 verticalAlign: 'top',
-                padding: '8px' // 调整内边距
+                padding: '8px'
             }
         }),
         render(row) {
             const schedulesInCell = row[day.id];
+            
+            if (selectedVenueId.value) {
+                 const scheduleNodes = schedulesInCell.map(({ schedule, teacher }) => {
+                    const course = dataStore.courses.find(c => c.id === schedule.course_id);
+                    return h('div', { style: 'text-align: left; padding: 4px; border-radius: 4px; background-color: #e6f7ff; border: 1px solid #91d5ff; margin-top: 4px;' }, [
+                        h('div', { style: 'font-weight: bold;' }, `${course?.name || '未知'}`),
+                        h('div', `${teacher?.name || '未知教师'}`)
+                    ]);
+                });
+                return h('div', null, scheduleNodes);
+            }
+
             const actualCount = schedulesInCell.length;
             const timeId = row.key;
             const dayId = day.id;
@@ -110,6 +137,61 @@ const columns = computed(() => {
     ];
 });
 
+const handleExportToCsv = () => {
+    if (!selectedCampusId.value) {
+        message.warning('请先选择一个校区');
+        return;
+    }
+
+    const headers = ['时间', ...days.value.map(d => d.value)];
+    const rows = tableData.value.map(row => {
+        const rowData = [row.time_slot];
+        days.value.forEach(day => {
+            const schedules = row[day.id];
+            if (schedules.length === 0) {
+                rowData.push('');
+            } else {
+                const cellContent = schedules.map(({ schedule, teacher }) => {
+                    const course = dataStore.courses.find(c => c.id === schedule.course_id);
+                    const venue = dataStore.campuses.find(c => c.id === schedule.campus_id)
+                        ?.venues.find(v => v.id === schedule.venue_id);
+                    
+                    const courseName = course?.name || '未知课程';
+                    const teacherName = teacher?.name || '未知教师';
+                    const venueName = venue?.name || '未知场地';
+                    
+                    return `${courseName} (${teacherName} - ${venueName})`;
+                }).join('\n');
+                
+                rowData.push(`"${cellContent.replace(/"/g, '""')}"`);
+            }
+        });
+        return rowData.join(',');
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\n');
+    
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+
+    const campusName = campusOptions.value.find(c => c.value === selectedCampusId.value)?.label || '课表';
+    const venueName = venueOptions.value.find(v => v.value === selectedVenueId.value)?.label;
+    const fileName = venueName ? `${campusName}_${venueName}_课表.csv` : `${campusName}_总课表.csv`;
+
+    link.setAttribute('download', fileName);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    message.success('CSV文件已开始下载');
+};
+
+
 watch(() => dataStore.campuses, (newCampuses) => {
     if (selectedCampusId.value && !newCampuses.find(c => c.id === selectedCampusId.value)) {
         selectedCampusId.value = null;
@@ -123,8 +205,16 @@ watch(() => dataStore.campuses, (newCampuses) => {
         <n-layout-header bordered style="padding: 12px 24px;">
             <n-flex justify="space-between" align="center">
                 <n-h2 style="margin: 0;">校区总课表</n-h2>
-                <n-select v-model:value="selectedCampusId" placeholder="请选择校区" :options="campusOptions" clearable
-                    style="width: 250px" />
+                <n-flex align="center">
+                    <n-button type="primary" @click="handleExportToCsv" :disabled="!selectedCampusId">
+                        <template #icon><n-icon :component="ExportIcon" /></template>
+                        导出CSV
+                    </n-button>
+                    <n-select v-model:value="selectedCampusId" placeholder="请选择校区" :options="campusOptions" clearable
+                        style="width: 100px" />
+                    <n-select v-model:value="selectedVenueId" placeholder="选择场地" :options="venueOptions" clearable
+                        :disabled="!selectedCampusId" style="width: 150px" />
+                </n-flex>
             </n-flex>
         </n-layout-header>
 

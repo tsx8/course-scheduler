@@ -24,6 +24,7 @@ export const useDataStore = defineStore('data', () => {
 
     const selectedCampusIdForCampusView = ref(null);
     const selectedTeacherIdForTeacherView = ref(null);
+    const selectedVenueIdForCampusView = ref(null); 
 
     const debouncedSave = debounce(async (data) => {
         console.log('Saving temp data to backend...');
@@ -286,12 +287,20 @@ export const useDataStore = defineStore('data', () => {
         return unavailableSet;
     });
 
-    const getScheduledClassesByCampus = computed(() => (campusId) => {
+    const getScheduledClassesByCampus = computed(() => {
+        const campusId = selectedCampusIdForCampusView.value;
+        const venueId = selectedVenueIdForCampusView.value;
+
+        if (!campusId) return new Map();
+
         const scheduleMap = new Map();
         teachers.value.forEach(teacher => {
             if (teacher.scheduled) {
                 teacher.scheduled.forEach(schedule => {
-                    if (schedule.campus_id === campusId) {
+                    const campusMatch = schedule.campus_id === campusId;
+                    const venueMatch = !venueId || schedule.venue_id === venueId;
+
+                    if (campusMatch && venueMatch) {
                         const key = `${schedule.day_id}-${schedule.time_id}`;
                         if (!scheduleMap.has(key)) {
                             scheduleMap.set(key, []);
@@ -439,6 +448,7 @@ export const useDataStore = defineStore('data', () => {
 
         selectedCampusIdForCampusView,
         selectedTeacherIdForTeacherView,
+        selectedVenueIdForCampusView,
 
         courseOptions,
         campusOptions,
