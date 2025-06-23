@@ -59,6 +59,8 @@ class DataManager:
         self.existing_teacher_day_time_busy = {}
         
         self.existing_work_days = {t_idx: set() for t_idx in range(len(self.teacher_list))}
+        
+        self.existing_teacher_day_class_count = {}
 
         for t_idx, teacher in enumerate(self.teacher_list):
             for scheduled in teacher.get('scheduled', []):
@@ -74,6 +76,9 @@ class DataManager:
                 i_idx = self.time_id_to_idx[time_id]
                 v_idx = self.venue_id_to_idx[venue_id]
                 c_idx = self.campus_id_to_idx[campus_id]
+                
+                count_key = (t_idx, d_idx)
+                self.existing_teacher_day_class_count[count_key] = self.existing_teacher_day_class_count.get(count_key, 0) + 1
                 
                 self.existing_work_days[t_idx].add(d_idx)
 
@@ -92,6 +97,7 @@ def solve_scheduling(data_manager):
     dm = data_manager
     model = cp_model.CpModel()
 
+    # --- Decision Variables ---
     x = {}
     
     for t_idx, teacher in enumerate(dm.teacher_list):
@@ -107,6 +113,9 @@ def solve_scheduling(data_manager):
 
     print(f"Created {len(x)} potential assignment variables after pruning.")
 
+    # --- Hard Constraints ---
+
+    # A teacher can teach at most one class at any given time.
     for t_idx, teacher in enumerate(dm.teacher_list):
         teacher_id = teacher['id']
         unavailable_slots = {(dm.day_id_to_idx[u['day_id']], dm.time_id_to_idx[u['time_id']]) for u in teacher.get('unavailable', [])}
@@ -126,6 +135,7 @@ def solve_scheduling(data_manager):
                 if (d_idx, i_idx) in unavailable_slots:
                     model.Add(sum(possible_classes_in_slot) == 0)
     
+    # A venue cannot be overbooked.
     for v_idx in range(len(dm.venue_list)):
         venue_capacity = dm.venue_list[v_idx]['capacity']
         for d_idx in range(len(dm.day_list)):
@@ -137,6 +147,7 @@ def solve_scheduling(data_manager):
                 )
                 model.Add(new_usage + existing_usage <= venue_capacity)
 
+    # A teacher cannot exceed their maximum teaching hours.
     for t_idx, teacher in enumerate(dm.teacher_list):
         existing_hours = dm.existing_teacher_hours[t_idx]
         new_hours = sum(
@@ -145,6 +156,7 @@ def solve_scheduling(data_manager):
         )
         model.Add(new_hours + existing_hours <= teacher['max_teaching_hours'])
 
+    # "is_only_shahe" teachers can only teach at the Shahe campus.
     for t_idx, teacher in enumerate(dm.teacher_list):
         if teacher['is_only_shahe']:
             shahe_campus_idx = dm.campus_id_to_idx['138697dc-1591-4c16-b60e-d0057964be56']
@@ -153,6 +165,7 @@ def solve_scheduling(data_manager):
                     venue_campus_idx = dm.venue_idx_to_campus_idx[key[4]]
                     model.AddImplication(var, model.NewConstant(venue_campus_idx == shahe_campus_idx))
 
+    # A teacher can only be at one campus on any given day.
     for t_idx in range(len(dm.teacher_list)):
         for d_idx in range(len(dm.day_list)):
             teacher_day_campus_vars = [model.NewBoolVar(f'teacher_{t_idx}_day_{d_idx}_campus_{c_idx}') for c_idx in range(len(dm.campus_list))]
@@ -168,6 +181,7 @@ def solve_scheduling(data_manager):
                     venue_campus_idx = dm.venue_idx_to_campus_idx[key[4]]
                     model.AddImplication(var, teacher_day_campus_vars[venue_campus_idx])
 
+    # Teachers not restricted to Shahe must teach at both campuses.
     for t_idx, teacher in enumerate(dm.teacher_list):
         if not teacher['is_only_shahe']:
             teacher_teaches_at_campus = [model.NewBoolVar(f'teacher_{t_idx}_teaches_at_campus_{c_idx}') for c_idx in range(len(dm.campus_list))]
@@ -182,27 +196,11 @@ def solve_scheduling(data_manager):
                 
             model.Add(sum(teacher_teaches_at_campus) == len(dm.campus_list))
 
-    for t_idx in range(len(dm.teacher_list)):
-        for d_idx in range(len(dm.day_list)):
-            is_busy_in_slot = []
-            for i_idx in range(len(dm.time_list)):
-                slot_is_busy = model.NewBoolVar(f'teacher_{t_idx}_day_{d_idx}_time_{i_idx}_busy')
-                has_existing = dm.existing_teacher_day_time_busy.get((t_idx, d_idx, i_idx), False)
-                new_classes_in_slot = [
-                    var for key, var in x.items()
-                    if key[0] == t_idx and key[2] == d_idx and key[3] == i_idx
-                ]
-                
-                model.AddBoolOr([model.NewConstant(has_existing)] + new_classes_in_slot).OnlyEnforceIf(slot_is_busy)
-                model.Add(sum(new_classes_in_slot) == 0).OnlyEnforceIf(slot_is_busy.Not())
-                if not has_existing:
-                     model.Add(sum(new_classes_in_slot) > 0).OnlyEnforceIf(slot_is_busy)
-                
-                is_busy_in_slot.append(slot_is_busy)
-            
-            if len(is_busy_in_slot) == 3:
-                model.AddBoolOr([is_busy_in_slot[0].Not(), is_busy_in_slot[1], is_busy_in_slot[2].Not()])
-
+    # This dictionary will store the working day variables for each teacher,
+    # to be reused by the soft constraint for workday concentration.
+    all_teacher_work_day_vars = {}
+    
+    # Teachers should not work more than 3 days a week, unless already scheduled for more.
     for t_idx, teacher in enumerate(dm.teacher_list):
         num_existing_days = len(dm.existing_work_days[t_idx])
 
@@ -234,8 +232,130 @@ def solve_scheduling(data_manager):
             
             model.Add(total_activity_on_day == 0).OnlyEnforceIf(works_on_day.Not())
 
+        all_teacher_work_day_vars[t_idx] = is_working_day_vars
         model.Add(sum(is_working_day_vars) <= 3)
 
+    # --- Soft Constraints & Objective Function ---
+
+    # Soft Constraint 1: Penalize having only one class on a given day.
+    single_class_day_penalties = []
+    for t_idx in range(len(dm.teacher_list)):
+        for d_idx in range(len(dm.day_list)):
+            existing_classes_count = dm.existing_teacher_day_class_count.get((t_idx, d_idx), 0)
+            new_classes_on_day = sum(
+                var for key, var in x.items()
+                if key[0] == t_idx and key[2] == d_idx
+            )
+            
+            total_classes_on_day = model.NewIntVar(0, 10, f'total_classes_t{t_idx}_d{d_idx}')
+            model.Add(total_classes_on_day == existing_classes_count + new_classes_on_day)
+            
+            is_single_class_day = model.NewBoolVar(f'is_single_class_day_t{t_idx}_d{d_idx}')
+            
+            model.Add(total_classes_on_day == 1).OnlyEnforceIf(is_single_class_day)
+            model.Add(total_classes_on_day != 1).OnlyEnforceIf(is_single_class_day.Not())
+            
+            single_class_day_penalties.append(is_single_class_day)
+    total_single_class_penalty = sum(single_class_day_penalties)
+
+    # Soft Constraint 2: Penalize gaps in a teacher's daily schedule for continuity.
+    schedule_gap_penalties = []
+    for t_idx in range(len(dm.teacher_list)):
+        for d_idx in range(len(dm.day_list)):
+            # 1. Create a variable for each time slot indicating if a class is scheduled.
+            has_class_on_day = []
+            for i_idx in range(len(dm.time_list)):
+                has_class_var = model.NewBoolVar(f'has_class_t{t_idx}_d{d_idx}_i{i_idx}')
+                has_class_on_day.append(has_class_var)
+
+                new_classes_in_slot = [
+                    var for key, var in x.items()
+                    if key[0] == t_idx and key[2] == d_idx and key[3] == i_idx
+                ]
+                has_existing = dm.existing_teacher_day_time_busy.get((t_idx, d_idx, i_idx), False)
+
+                if has_existing:
+                    model.Add(has_class_var == 1)
+                else:
+                    if new_classes_in_slot:
+                        model.Add(sum(new_classes_in_slot) > 0).OnlyEnforceIf(has_class_var)
+                        model.Add(sum(new_classes_in_slot) == 0).OnlyEnforceIf(has_class_var.Not())
+                    else:
+                        model.Add(has_class_var == 0)
+
+            # 2. Identify and penalize gaps. A gap is an idle slot between two busy slots.
+            for i_idx in range(len(dm.time_list)):
+                # Does a class exist *before* this time slot on this day?
+                has_class_before = model.NewBoolVar(f'class_before_t{t_idx}_d{d_idx}_i{i_idx}')
+                if i_idx > 0:
+                    model.AddBoolOr(has_class_on_day[0:i_idx]).OnlyEnforceIf(has_class_before)
+                    model.Add(sum(has_class_on_day[0:i_idx]) == 0).OnlyEnforceIf(has_class_before.Not())
+                else:
+                    model.Add(has_class_before == 0)
+
+                # Does a class exist *after* this time slot on this day?
+                has_class_after = model.NewBoolVar(f'class_after_t{t_idx}_d{d_idx}_i{i_idx}')
+                if i_idx < len(dm.time_list) - 1:
+                    model.AddBoolOr(has_class_on_day[i_idx + 1:]).OnlyEnforceIf(has_class_after)
+                    model.Add(sum(has_class_on_day[i_idx + 1:]) == 0).OnlyEnforceIf(has_class_after.Not())
+                else:
+                    model.Add(has_class_after == 0)
+                
+                # A gap exists if there's a class before, a class after, and no class at this current slot.
+                is_a_gap = model.NewBoolVar(f'is_gap_t{t_idx}_d{d_idx}_i{i_idx}')
+                
+                # Model is_a_gap <=> AND(has_class_before, has_class_after, NOT has_class_on_day[i_idx])
+                model.Add(is_a_gap <= has_class_before)
+                model.Add(is_a_gap <= has_class_after)
+                model.Add(is_a_gap <= has_class_on_day[i_idx].Not())
+                model.Add(is_a_gap >= has_class_before + has_class_after + has_class_on_day[i_idx].Not() - 2)
+
+                schedule_gap_penalties.append(is_a_gap)
+    total_schedule_gap_penalty = sum(schedule_gap_penalties)
+
+    # NEW: Soft Constraint 3: Penalize scattered work days for a teacher to encourage concentration.
+    workday_concentration_penalties = []
+    for t_idx in range(len(dm.teacher_list)):
+        # Retrieve the work-day variables defined in the hard constraint section.
+        works_on_day_vars = all_teacher_work_day_vars.get(t_idx)
+        if not works_on_day_vars:
+            # This teacher's work days are likely fixed (e.g., already working >= 4 days), so we skip them.
+            continue
+        
+        # Identify and penalize idle days that fall between working days.
+        for d_idx in range(len(dm.day_list)):
+            # Does a work day exist *before* this day in the week?
+            has_work_before = model.NewBoolVar(f'work_before_t{t_idx}_d{d_idx}')
+            if d_idx > 0:
+                model.AddBoolOr(works_on_day_vars[0:d_idx]).OnlyEnforceIf(has_work_before)
+                model.Add(sum(works_on_day_vars[0:d_idx]) == 0).OnlyEnforceIf(has_work_before.Not())
+            else:
+                model.Add(has_work_before == 0)
+
+            # Does a work day exist *after* this day in the week?
+            has_work_after = model.NewBoolVar(f'work_after_t{t_idx}_d{d_idx}')
+            if d_idx < len(dm.day_list) - 1:
+                model.AddBoolOr(works_on_day_vars[d_idx + 1:]).OnlyEnforceIf(has_work_after)
+                model.Add(sum(works_on_day_vars[d_idx + 1:]) == 0).OnlyEnforceIf(has_work_after.Not())
+            else:
+                model.Add(has_work_after == 0)
+            
+            # A "gap day" is an idle day (works_on_day_vars[d_idx] is false)
+            # between two work days (has_work_before and has_work_after are true).
+            is_a_gap_day = model.NewBoolVar(f'is_gap_day_t{t_idx}_d{d_idx}')
+            
+            # Model is_a_gap_day <=> AND(has_work_before, has_work_after, NOT works_on_day_vars[d_idx])
+            model.Add(is_a_gap_day <= has_work_before)
+            model.Add(is_a_gap_day <= has_work_after)
+            model.Add(is_a_gap_day <= works_on_day_vars[d_idx].Not())
+            model.Add(is_a_gap_day >= has_work_before + has_work_after + works_on_day_vars[d_idx].Not() - 2)
+
+            workday_concentration_penalties.append(is_a_gap_day)
+            
+    total_workday_concentration_penalty = sum(workday_concentration_penalties)
+
+
+    # Objective 1: Minimize deviation from schedule density targets.
     diff_vars = []
     for c_idx in range(len(dm.campus_list)):
         for d_idx in range(len(dm.day_list)):
@@ -261,20 +381,62 @@ def solve_scheduling(data_manager):
 
     max_deviation = model.NewIntVar(0, 100, 'max_deviation')
     model.AddMaxEquality(max_deviation, diff_vars)
-
     total_deviation = sum(diff_vars)
-    
-    WEIGHT_FOR_MAX_DEVIATION = 10000 
 
-    model.Minimize(total_deviation + WEIGHT_FOR_MAX_DEVIATION * max_deviation)
+    # Objective 2: Maximize the number of "teacher-course-campus" combinations offered.
+    opened_course_options = []
+    for t_idx, teacher in enumerate(dm.teacher_list):
+        campus_indices_to_check = range(len(dm.campus_list))
+        if teacher['is_only_shahe']:
+            shahe_campus_idx = dm.campus_id_to_idx['138697dc-1591-4c16-b60e-d0057964be56']
+            campus_indices_to_check = [shahe_campus_idx]
+
+        for course_id in teacher['teaches']:
+            c_idx = dm.course_id_to_idx[course_id]
+            for campus_idx in campus_indices_to_check:
+                opens_course_at_campus = model.NewBoolVar(f'opens_t{t_idx}_c{c_idx}_k{campus_idx}')
+                
+                assignments_for_option = [
+                    var for key, var in x.items()
+                    if key[0] == t_idx and key[1] == c_idx and dm.venue_idx_to_campus_idx[key[4]] == campus_idx
+                ]
+                
+                if not assignments_for_option:
+                    model.Add(opens_course_at_campus == 0)
+                    continue
+
+                model.Add(sum(assignments_for_option) > 0).OnlyEnforceIf(opens_course_at_campus)
+                model.Add(sum(assignments_for_option) == 0).OnlyEnforceIf(opens_course_at_campus.Not())
+                
+                opened_course_options.append(opens_course_at_campus)
+    total_opened_courses = sum(opened_course_options)
+
+    # Define weights for different parts of the objective function.
+    WEIGHT_FOR_TOTAL_DEVIATION = 1
+    WEIGHT_FOR_MAX_DEVIATION = 1
+    WEIGHT_FOR_OPENED_COURSES = 1 
+    WEIGHT_FOR_SINGLE_CLASS_PENALTY = 1
+    WEIGHT_FOR_SCHEDULE_GAPS = 1
+    WEIGHT_FOR_WORKDAY_CONCENTRATION = 1 # Higher weight to strongly encourage concentrated schedules
+
+    # Combine objectives: Minimize deviation, single-class days and schedule gaps, while maximizing opened courses.
+    model.Minimize(
+          (WEIGHT_FOR_TOTAL_DEVIATION * total_deviation)
+        + (WEIGHT_FOR_MAX_DEVIATION * max_deviation) 
+        - (WEIGHT_FOR_OPENED_COURSES * total_opened_courses)
+        + (WEIGHT_FOR_SINGLE_CLASS_PENALTY * total_single_class_penalty)
+        + (WEIGHT_FOR_SCHEDULE_GAPS * total_schedule_gap_penalty)
+        + (WEIGHT_FOR_WORKDAY_CONCENTRATION * total_workday_concentration_penalty)
+    )
     
+    # --- Solve and Output ---
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 60.0
     status = solver.Solve(model)
 
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         print(f'Solution found with status: {"OPTIMAL" if status == cp_model.OPTIMAL else "FEASIBLE"}')
-        print(f'Objective value (total density difference): {solver.ObjectiveValue()}')
+        print(f'Objective value (lower is better): {solver.ObjectiveValue()}')
         
         new_schedules = {}
         for key, var in x.items():
@@ -299,6 +461,9 @@ def solve_scheduling(data_manager):
         
         for teacher in dm.data['teachers']:
             if teacher['id'] in new_schedules:
+                # Ensure 'scheduled' list exists before extending
+                if 'scheduled' not in teacher:
+                    teacher['scheduled'] = []
                 teacher['scheduled'].extend(new_schedules[teacher['id']])
                 print(f"Scheduled {len(new_schedules[teacher['id']])} new class(es) for {teacher['name']}.")
 

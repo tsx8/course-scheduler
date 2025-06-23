@@ -147,12 +147,68 @@ export const useDataStore = defineStore('data', () => {
         const newCourse = { ...data, id: uuidv4(), place: courseData.place || [] };
         courses.value.push(newCourse);
     };
+    
     const updateCourse = (updatedCourse) => {
         const index = courses.value.findIndex(c => c.id === updatedCourse.id);
         if (index !== -1) {
+            const originalCourse = JSON.parse(JSON.stringify(courses.value[index]));
+
+            const placeKey = p => `${p.campus_id}-${p.venue_id}`;
+
+            const originalPlaces = new Set(originalCourse.place.map(placeKey));
+            const updatedPlaces = new Set(updatedCourse.place.map(placeKey));
+
+            const removedPlacesRaw = originalCourse.place.filter(p => !updatedPlaces.has(placeKey(p)));
+            const addedPlacesRaw = updatedCourse.place.filter(p => !originalPlaces.has(placeKey(p)));
+
+            const campusToRemovedVenue = new Map();
+            removedPlacesRaw.forEach(p => {
+                if (!campusToRemovedVenue.has(p.campus_id)) {
+                    campusToRemovedVenue.set(p.campus_id, []);
+                }
+                campusToRemovedVenue.get(p.campus_id).push(p.venue_id);
+            });
+
+            const campusToAddedVenue = new Map();
+            addedPlacesRaw.forEach(p => {
+                if (!campusToAddedVenue.has(p.campus_id)) {
+                    campusToAddedVenue.set(p.campus_id, []);
+                }
+                campusToAddedVenue.get(p.campus_id).push(p.venue_id);
+            });
+
+            const replacements = [];
+            for (const [campusId, removedVenues] of campusToRemovedVenue.entries()) {
+                const addedVenues = campusToAddedVenue.get(campusId);
+                if (addedVenues && removedVenues.length === 1 && addedVenues.length === 1) {
+                    replacements.push({
+                        campusId: campusId,
+                        fromVenueId: removedVenues[0],
+                        toVenueId: addedVenues[0]
+                    });
+                }
+            }
+
+            if (replacements.length > 0) {
+                teachers.value.forEach(teacher => {
+                    if (teacher.scheduled && teacher.scheduled.length > 0) {
+                        teacher.scheduled.forEach(schedule => {
+                            if (schedule.course_id === updatedCourse.id) {
+                                replacements.forEach(rep => {
+                                    if (schedule.campus_id === rep.campusId && schedule.venue_id === rep.fromVenueId) {
+                                        schedule.venue_id = rep.toVenueId;
+                                    }
+                                });
+                            }
+                        });
+                    }
+                });
+            }
+            
             courses.value[index] = { ...courses.value[index], ...updatedCourse };
         }
     };
+
     const deleteCourse = (courseId) => {
         courses.value = courses.value.filter(c => c.id !== courseId);
         teachers.value.forEach(teacher => {
