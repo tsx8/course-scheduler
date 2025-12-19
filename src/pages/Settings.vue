@@ -2,9 +2,9 @@
 import { ref, computed, h } from 'vue';
 import {
     NLayout, NLayoutHeader, NLayoutContent, NFlex, NH2, NButton, NCard, NText, useMessage, useDialog,
-    NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NIcon, NSpace
+    NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NIcon, NSpace, NDivider
 } from 'naive-ui';
-import { AddOutline as AddIcon, CreateOutline as EditIcon, TrashOutline as DeleteIcon } from '@vicons/ionicons5';
+import { AddOutline as AddIcon, CreateOutline as EditIcon, TrashOutline as DeleteIcon, FolderOpenOutline as FolderIcon } from '@vicons/ionicons5';
 import { useDataStore } from '../stores/data';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -17,13 +17,24 @@ const handleExportData = async () => {
     try {
         const filePath = await save({
             title: '导出数据到...',
-            filters: [{ name: 'JSON', extensions: ['json'] }],
-            defaultPath: 'data.json'
+            filters: [
+                { name: 'SQLite Database', extensions: ['db'] },
+                { name: 'JSON', extensions: ['json'] }
+            ],
+            defaultPath: 'course_scheduler_export.db'
         });
 
         if (filePath) {
-            await invoke('export_data', { filePath });
-            message.success('数据导出成功！');
+            // Determine file type based on extension
+            const isJson = filePath.toLowerCase().endsWith('.json');
+            
+            if (isJson) {
+                await invoke('export_json', { filePath });
+                message.success('数据已导出为JSON格式！');
+            } else {
+                await invoke('export_database', { filePath });
+                message.success('数据已导出为数据库格式！');
+            }
         }
     } catch (error) {
         console.error('导出失败:', error);
@@ -36,17 +47,47 @@ const handleImportData = async () => {
         const selectedPath = await open({
             title: '从文件导入数据',
             multiple: false,
-            filters: [{ name: 'JSON', extensions: ['json'] }]
+            filters: [
+                { name: 'All Supported', extensions: ['db', 'json'] },
+                { name: 'SQLite Database', extensions: ['db'] },
+                { name: 'JSON', extensions: ['json'] }
+            ]
         });
 
         if (selectedPath) {
-            const importedData = await invoke('import_data', { filePath: selectedPath }); 
-            dataStore.replaceAllData(importedData);
-            message.success('数据导入成功，已加载新数据！');
+            // Determine file type based on extension
+            const isJson = selectedPath.toLowerCase().endsWith('.json');
+            
+            let stats;
+            if (isJson) {
+                stats = await invoke('import_json', { filePath: selectedPath });
+                message.success(`JSON数据已导入到临时区域！${stats.teachers}位教师，${stats.courses}门课程，${stats.schedules}个排课。请检查后点击"保存"提交。`);
+            } else {
+                stats = await invoke('import_database', { filePath: selectedPath });
+                message.success(`数据库已导入到临时区域！${stats.teachers}位教师，${stats.courses}门课程，${stats.schedules}个排课。请检查后点击"保存"提交。`);
+            }
+            
+            // Reload data to show imported data
+            const reloadedData = await invoke('load_data');
+            dataStore.replaceAllData(reloadedData);
         }
     } catch (error) {
         console.error('导入失败:', error);
-        message.error(`导入失败: ${error}`);
+        dialog.error({
+            title: '导入失败',
+            content: `导入过程中发生错误:\n${error}`,
+            positiveText: '确定'
+        });
+    }
+};
+
+const handleOpenLogsFolder = async () => {
+    try {
+        await invoke('open_logs_folder');
+        message.success('已打开日志文件夹');
+    } catch (error) {
+        console.error('打开日志文件夹失败:', error);
+        message.error(`打开失败: ${error}`);
     }
 };
 
@@ -225,14 +266,31 @@ const handleDaySubmit = () => {
                 </n-card>
 
                 <n-card title="数据管理">
-                    <n-flex vertical>
-                        <n-text>
-                            你可以将当前的所有数据（包括教师、课程、场地、课表等）导出为一个 JSON 文件进行备份，或从备份文件中恢复数据。
-                        </n-text>
-                        <n-flex>
-                            <n-button type="primary" @click="handleExportData">导出数据...</n-button>
-                            <n-button @click="handleImportData">导入数据...</n-button>
-                        </n-flex>
+                    <n-flex vertical :size="16">
+                        <div>
+                            <n-text strong>导入/导出</n-text>
+                            <n-text style="display: block; margin-top: 8px;">
+                                将数据导出为 SQLite 数据库（.db）或 JSON 文件（.json）进行备份，或从备份文件恢复数据。
+                                导入操作会将数据加载到临时区域，请检查后点击"保存"按钮提交。
+                            </n-text>
+                            <n-flex style="margin-top: 12px;">
+                                <n-button type="primary" @click="handleExportData">导出数据...</n-button>
+                                <n-button @click="handleImportData">导入数据...</n-button>
+                            </n-flex>
+                        </div>
+                        
+                        <n-divider style="margin: 8px 0;" />
+                        
+                        <div>
+                            <n-text strong>日志文件</n-text>
+                            <n-text style="display: block; margin-top: 8px;">
+                                应用运行日志保存在本地文件夹中，记录系统操作和错误信息。日志文件按天轮转，自动保留最近30天的记录。
+                            </n-text>
+                            <n-button style="margin-top: 12px;" @click="handleOpenLogsFolder">
+                                <template #icon><n-icon :component="FolderIcon" /></template>
+                                打开日志文件夹
+                            </n-button>
+                        </div>
                     </n-flex>
                 </n-card>
             </n-flex>

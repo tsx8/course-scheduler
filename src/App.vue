@@ -1,5 +1,5 @@
 <script setup>
-import { NConfigProvider, NMessageProvider, NDialogProvider } from 'naive-ui';
+import { NConfigProvider, NMessageProvider, NDialogProvider, NNotificationProvider } from 'naive-ui';
 
 const themeOverrides = {
   common: {
@@ -13,7 +13,9 @@ const themeOverrides = {
   <n-config-provider :theme-overrides="themeOverrides">
     <n-message-provider>
       <n-dialog-provider>
-        <router-view />
+        <n-notification-provider>
+          <router-view />
+        </n-notification-provider>
       </n-dialog-provider>
     </n-message-provider>
   </n-config-provider>

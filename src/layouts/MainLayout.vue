@@ -48,7 +48,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useDataStore } from '../stores/data';
 import {
     NLayout, NLayoutHeader, NLayoutSider, NLayoutContent, NMenu, NIcon,
-    NSpin, NButton, NButtonGroup, useDialog, useMessage
+    NSpin, NButton, NButtonGroup, useDialog, useMessage, useNotification
 } from 'naive-ui';
 import {
     BookOutline as BookIcon,
@@ -67,12 +67,14 @@ import {
 } from '@vicons/ionicons5';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 const dataStore = useDataStore();
 const route = useRoute();
 const router = useRouter();
 const dialog = useDialog();
 const message = useMessage();
+const notification = useNotification();
 
 const appWindow = getCurrentWebviewWindow();
 const isMaximized = ref(false);
@@ -83,6 +85,8 @@ onMounted(async () => {
     if (!dataStore.isInitialized) {
         dataStore.initializeData();
     }
+    
+    // Existing close dialog listener
     await appWindow.listen('show-close-dialog', () => {
         showConfirmDialog();
     });

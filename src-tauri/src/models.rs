@@ -9,6 +9,16 @@ pub struct AllData {
     pub teachers: Vec<Teacher>,
 }
 
+/// Migration statistics returned after JSON-to-SQLite migration
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MigrationStats {
+    pub teachers: usize,
+    pub courses: usize,
+    pub schedules: usize,
+    pub source_path: String,
+    pub source_location: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TimeSlot {
     pub id: String,

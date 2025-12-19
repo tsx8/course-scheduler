@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, watch, toRaw, computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { v4 as uuidv4 } from 'uuid';
 
 function debounce(fn, delay) {
@@ -55,6 +56,15 @@ export const useDataStore = defineStore('data', () => {
 
             isInitialized.value = true;
             console.log('Data initialized successfully.');
+            
+            // Set up event listener for commit-completed (T027)
+            listen('commit-completed', () => {
+                console.log('Commit completed event received');
+                // Reset dirty state - no unsaved changes after commit
+                // The watcher will handle any new changes automatically
+            }).catch(err => {
+                console.error('Failed to set up commit-completed listener:', err);
+            });
 
             watch(
                 () => ({
