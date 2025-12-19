@@ -168,8 +168,11 @@ course-scheduler/
 用户编辑 → 自动保存到 temp 表 → 用户确认 → 提交到主表
                     ↓
                  可随时撤销
-```Roaming\com.tsxb.course-scheduler\course_scheduler.db`
-- 日志文件: `%APPDATA%\Roaming\com.tsxb.course-scheduler\logs\course-scheduler-YYYY.MM.DD.log`
+```
+
+**Windows 数据位置**:
+- 数据库文件: `%APPDATA%\com.tsxb.course-scheduler\course_scheduler.db`
+- 日志文件: `%APPDATA%\com.tsxb.course-scheduler\logs\course-scheduler-YYYY.MM.DD.log`
 - 旧版 JSON 文件在首次启动时自动迁移,备份为 `data.json.backup`
 
 **备份建议**: 定期复制 `course_scheduler.db` 文件到安全位置
@@ -190,10 +193,7 @@ course-scheduler/
 - 📝 **日期轮转**: 每天生成新的日志文件（格式: `course-scheduler-YYYY.MM.DD.log`）
 - 🧹 **自动清理**: 保留最近 3 天的日志,删除 30 天前的旧日志
 - 🔄 **智能恢复**: 日志文件被删除后会自动重新创建
-- 📊 **日志级别**: 支持通过 `RUST_LOG` 环境变量控制日志详细程度_scheduler.db`
-- 旧版 JSON 文件在首次启动时自动迁移为 `data.json.backup`
-
-**备份建议**: 定期复制 `course_scheduler.db` 文件到安全位置
+- 📊 **日志级别**: 支持通过 `RUST_LOG` 环境变量控制日志详细程度
 
 ### 排课求解器集成
 
@@ -216,14 +216,28 @@ model.Minimize(
     penalty_course_openings * 100 +      # 课程开设惩罚
     penalty_campus_imbalance * 2 +       # 校区不均衡惩罚
     penalty_hour_imbalance * 1           # 课时不均衡惩罚
-)相关模块（如 `db_handler.rs`、`import_export.rs`）定义函数
+)
+```
+
+然后重新构建求解器：
+
+```bash
+cd solver
+uv run pyinstaller solver.spec
+cd ..
+node scripts/prepare-solver.js
+```
+
+### 添加新的 Tauri 命令
+
+1. 在相关模块（如 `db_handler.rs`、`import_export.rs`）定义函数
 2. 使用 `#[tauri::command]` 宏标注
 3. 在 `main.rs` 的 `invoke_handler!` 注册
 4. 前端通过 `invoke('command_name')` 调用
 
 ### 数据模型修改
 
-⚠️ **关键**: `AllData` 结构在三处必须同步更新：
+⚠️ **关键**: `AllData` 结构在四处必须同步更新：
 - `src-tauri/src/models.rs` (Rust 类型)
 - `src-tauri/schema.sql` (SQLite 表结构)
 - `solver/solver.py` (Python DataManager)
@@ -241,28 +255,16 @@ model.Minimize(
 1. 更新 `schema.sql` 文件
 2. 同步更新 `models.rs` 中的 Rust 类型
 3. 更新 `db_handler.rs` 中的数据库操作代码
+
+### 独立测试求解器
+
+```bash
+cd solver
 uv venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 uv pip install -r pyproject.toml
 python solver.py input.json output.json
 ```
-
-### 添加新的 Tauri 命令
-
-1. 在 `src-tauri/src/main.rs` 或 `file_handler.rs` 定义函数
-2. 使用 `#[tauri::command]` 宏标注
-3. 在 `main.rs` 的 `invoke_handler!` 注册
-4. 前端通过 `invoke('command_name')` 调用
-
-### 数据模型修改
-
-⚠️ **关键**: `AllData` 结构在三处必须同步更新：
-- `src-tauri/src/models.rs` (Rust 类型)
-- [x] **导入导出功能**: ✅ 已完成 - 支持 JSON 和数据库文件的导入导出
-- [x] **日志系统**: ✅ 已完成 - 结构化日志,支持日期轮转和自动清理
-- [x] **单实例运行**: ✅ 已完成 - 防止同时打开多个应用实例
-- [ ] **冲突检测**: 实时显示排课冲突
-- [ ] **Excel/PDF 导出
 ## 📦 构建与部署
 
 ### Windows
@@ -274,8 +276,11 @@ npm run tauri build
 ## 🔮 路线图
 
 - [x] **SQLite 数据库**: ✅ 已完成 - 替换 JSON 文件为嵌入式数据库
+- [x] **导入导出功能**: ✅ 已完成 - 支持 JSON 和数据库文件的导入导出
+- [x] **日志系统**: ✅ 已完成 - 结构化日志,支持日期轮转和自动清理
+- [x] **单实例运行**: ✅ 已完成 - 防止同时打开多个应用实例
 - [ ] **冲突检测**: 实时显示排课冲突
-- [ ] **导出功能**: 支持导出 Excel/PDF 格式课表
+- [ ] **Excel/PDF 导出**: 支持导出 Excel/PDF 格式课表
 - [ ] **统计分析**: 课程分布、教师工作量可视化
 
 ## 🤝 贡献
