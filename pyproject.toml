@@ -1,5 +1,5 @@
 [project]
-name = "solver"
+name = "course-scheduler"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -8,3 +8,6 @@ dependencies = [
     "ortools>=9.14.6206",
     "pyinstaller>=6.14.1",
 ]
+
+[tool.ty.environment]
+python = ".venv"
