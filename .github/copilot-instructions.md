@@ -6,12 +6,21 @@ This is a **Tauri desktop app** with a hybrid multi-language stack:
 - **Frontend**: Vue 3 + Vite + Naive UI + Pinia (state management)
 - **Backend**: Rust (Tauri framework for native OS integration)
 - **Solver**: Python (OR-Tools CP-SAT) compiled to standalone binary via PyInstaller
+- **Database**: SQLite (embedded, zero-config persistence)
 
-### Key Architectural Pattern: "Optimistic Temp-to-Commit"
-All edits go to `data.tmp.json` (auto-saved via debounced watcher in `src/stores/data.js`). The user explicitly commits/reverts via UI actions. This enables:
+### Key Architectural Pattern: "Optimistic Temp-to-Commit" with Dual Table Schema
+All edits are saved to **temporary tables** (`*_temp` suffix in SQLite) via auto-save watcher in `src/stores/data.js` (100ms debounce). The user explicitly commits/reverts via UI actions:
+- **Main tables**: Committed, permanent data (e.g., `teachers`, `courses`, `campuses`)
+- **Temp tables**: Working state (e.g., `teachers_temp`, `courses_temp`)
+- **Auto-save**: Every edit → temp tables (see `save_temp_data` command)
+- **Commit**: Copies all temp tables → main tables (see `commit_data` command)
+- **Revert**: Clears temp tables, reloads from main tables (see `clear_temp_data`)
+
+This enables:
 - Instant undo without complex state management
 - Safe experimentation with the constraint solver
 - Clean separation between working state and committed state
+- Transactional safety via SQLite ACID guarantees
 
 ## Critical Developer Workflows
 
@@ -22,19 +31,26 @@ npm run tauri build
 This automatically:
 1. Builds the Python solver via `npm run build:solver` (uses `uv` + PyInstaller)
 2. Copies solver binary to `src-tauri/binaries/solver-<target>` via `scripts/prepare-solver.js`
-3. Bundles Vite frontend + Rust backend + solver into single executable
+3. Bundles Vite frontend + Rust backend + solver + SQLite into single executable
 
 ### Dev Environment Setup
 1. Install Rust, Node.js, and Python 3.11+
 2. Install `uv` (Python package manager): `pip install uv`
 3. Run `npm install` for frontend deps
-4. Run `npm run build:solver` before first dev run
-5. Run `npm run tauri dev` (auto-runs solver build + Vite dev server)
+4. Run `uv sync` in project root (installs Python deps via `pyproject.toml`)
+5. Run `npm run build:solver` before first dev run
+6. Run `npm run tauri dev` (auto-runs solver build + Vite dev server)
+
+### Database Location (Windows)
+- **Production**: `%APPDATA%\Roaming\com.tsxb.course-scheduler\course_scheduler.db`
+- **Logs**: `%APPDATA%\Roaming\com.tsxb.course-scheduler\logs\course-scheduler-YYYY.MM.DD.log`
+- **First Launch**: Automatically migrates old `data.json` → SQLite, creates backup as `data.json.backup-YYYYMMDD-HHMMSS`
 
 ### Solver Development Cycle
 - Edit `solver/solver.py` (OR-Tools constraint model)
 - Rebuild: `cd solver && uv run pyinstaller solver.spec && cd .. && node scripts/prepare-solver.js`
 - Test in app: trigger "自动排课" (Auto Schedule) button in UI
+- Solver still uses JSON I/O (Rust serializes DB → JSON → passes to solver → parses result → writes to DB)
 
 ## Data Model (Shared JSON Schema)
 
@@ -65,7 +81,7 @@ The entire app revolves around `AllData` structure defined in **both** `src-taur
 1. User clicks "自动排课" → `MainLayout.vue` calls `invoke('run_solver')`
 2. Rust (`src-tauri/src/main.rs:run_solver`) spawns solver as sidecar process
 3. Solver reads input JSON, runs CP-SAT, writes output JSON
-4. Rust parses output, writes to `data.tmp.json`, returns to frontend
+4. Rust parses output, writes to temp tables via `db_handler.rs`, returns to frontend
 5. Frontend (`data.js`) replaces store state with solver results
 
 ### Solver Architecture (`solver/solver.py`)
@@ -84,8 +100,9 @@ The entire app revolves around `AllData` structure defined in **both** `src-taur
 ### Pinia Store (`src/stores/data.js`)
 - **Single source of truth**: `teachers`, `courses`, `campuses`, `time`, `day` refs
 - **Auto-save**: Deep watcher triggers `debouncedSave` (100ms) on any mutation
-- **Revert**: `revertChanges()` clears temp, reloads from `data.json`
-- **Commit**: `commitChanges()` renames `data.tmp.json` → `data.json`
+- **Load**: `invoke('load_data')` fetches from SQLite (temp tables if exist, else main tables)
+- **Revert**: `revertChanges()` clears temp tables, reloads from main tables
+- **Commit**: `commitChanges()` copies temp tables → main tables
 
 ### Critical: Venue Update Propagation
 When a course's venue changes (lines 150-210 in `data.js`), the store automatically updates all teacher schedules with "smart replacement" logic:
@@ -107,17 +124,24 @@ All pages in `src/pages/` follow this pattern:
 
 ## Tauri Commands Reference
 
-**File Operations** (`src-tauri/src/file_handler.rs`):
-- `load_data()`: Loads temp if exists, else data.json
-- `save_temp_data(content)`: Debounced auto-save target
-- `commit_data()`: Rename temp → data
-- `clear_temp_data()`: Delete temp (for revert)
-- `import_data(file_path)`: Load external JSON into temp
-- `export_data(file_path)`: Save current state to file
+**Database Operations** (`src-tauri/src/db_handler.rs`):
+- `load_data()`: Loads temp if exists, else main tables
+- `save_temp_data(content)`: Debounced auto-save target (writes to temp tables)
+- `commit_data()`: Copy temp tables → main tables
+- `clear_temp_data()`: Delete all temp table data (for revert)
+
+**Import/Export** (`src-tauri/src/import_export.rs`):
+- `import_json(file_path)`: Load external JSON into temp tables (user reviews then commits)
+- `export_json(file_path)`: Export current state to JSON file
+- `import_database(file_path)`: Import from another SQLite database into temp tables
+- `export_database(file_path)`: Copy entire database file (main + temp tables)
 
 **Solver** (`src-tauri/src/main.rs`):
 - `run_solver()`: Spawns Python binary, handles I/O, returns solved AllData
 - `finalize_and_close(save)`: Commit/discard on app exit
+
+**Utilities**:
+- `open_logs_folder()`: Opens log directory in file explorer
 
 ## Testing the Solver
 
@@ -128,6 +152,42 @@ Manual test workflow:
 4. If no solution: relax constraints (increase max_teaching_hours, add venues, reduce unavailable slots)
 5. Revert if unsatisfied, iterate on solver weights in `solver.py:422`
 
+## Database Schema Reference
+
+SQLite database uses **dual-table pattern** with main and temp tables:
+- **Main tables**: `teachers`, `courses`, `campuses`, `venues`, `time_slots`, `days`, `scheduled_classes`, `teacher_courses`, `course_venues`, `teacher_unavailability`, `schedule_density`
+- **Temp tables**: Identical structure with `_temp` suffix
+- **Foreign keys**: All relationships enforced with `ON DELETE CASCADE`
+- **Schema file**: `src-tauri/schema.sql` - executed on first run to initialize database
+
+Key tables:
+- `teachers`: Core teacher info with `is_only_shahe` flag
+- `scheduled_classes`: Stores scheduled lessons (teacher, course, day, time, campus, venue)
+- `teacher_unavailability`: Stores blackout periods (teacher, day, time)
+- `course_venues`: Junction table linking courses to allowed venues
+- `schedule_density`: Campus schedule load tracking (campus, day, time, count)
+
+## Import/Export Features
+
+All import operations write to **temp tables only** - user must commit changes:
+1. **JSON Import**: Parses `AllData` JSON → writes to temp tables → user reviews → commit
+2. **Database Import**: Opens external `.db` file → validates schema → copies to temp tables
+3. **JSON Export**: Queries current state → serializes to `AllData` JSON → writes file
+4. **Database Export**: Copies entire `.db` file (includes both main and temp tables)
+
+Import/export commands defined in `src-tauri/src/import_export.rs` and invoked from `src/pages/Settings.vue`.
+
+## Migration from JSON (First Launch)
+
+On first run, if database is empty and `data.json` exists:
+1. Check `%APPDATA%\Roaming\com.tsxb.course-scheduler\data.json` first
+2. Fall back to old location `%APPDATA%\Local\course-scheduler\data.json`
+3. Parse JSON → insert into **main tables** (not temp) via `migrate_from_json()`
+4. Backup original as `data.json.backup-YYYYMMDD-HHMMSS` in new AppData location
+5. Clear temp tables to ensure clean state
+
+Migration code in `src-tauri/src/db_handler.rs` lines 45-200.
+
 ## Common Gotchas
 
 - **Solver timeout**: 60s limit in `solver.py:437`. Increase for complex schedules.
@@ -135,46 +195,23 @@ Manual test workflow:
 - **ID consistency**: All IDs are UUIDs generated via `uuid.v4()` in JS, must match across entities.
 - **Campus hardcoding**: Shahe campus ID is hardcoded in solver (line 172). Update if campus list changes.
 - **Build order**: Always `build:solver` before `tauri build/dev` or sidecar will fail.
+- **Database locks**: SQLite uses `Mutex<Connection>` - avoid long-running operations in Tauri commands.
+- **Foreign key constraints**: Enabled in `schema.sql` - deletions cascade automatically.
 
 ## File Ownership Guide
 
 - **Solver logic**: Only modify `solver/solver.py`, never touch generated `build/` or `dist/`
-- **Data schema changes**: Update BOTH `src-tauri/src/models.rs` AND `solver/solver.py` DataManager
+- **Database schema**: Update BOTH `src-tauri/schema.sql` AND `src-tauri/src/db_handler.rs` serialization logic
+- **Data model changes**: Update BOTH `src-tauri/src/models.rs` AND `solver/solver.py` DataManager
 - **UI pages**: Independent, no shared state beyond Pinia store
-- **Tauri commands**: Add to `file_handler.rs` or `main.rs`, register in `main.rs:163`
+- **Tauri commands**: Add to `db_handler.rs`, `import_export.rs`, or `main.rs`, register in `main.rs`
 
-## Next Steps: PostgreSQL Migration
+## Logging System
 
-**Current State**: All data persists in flat JSON files (`data.json` / `data.tmp.json`)
-
-**Planned Migration**: Complete replacement of file-based storage with PostgreSQL database
-
-### Critical Requirement
-**Keep the `AllData` data model entirely unchanged** - the frontend, solver, and Rust types must continue to work with the exact same structure. Only the persistence layer changes.
-
-### Migration Strategy
-- **Schema Design**: Map `AllData` structure to relational tables:
-  - Core tables: `teachers`, `courses`, `campuses`, `venues`, `time_slots`, `days`
-  - Junction tables: `teacher_courses`, `course_venues`, `scheduled_classes`, `teacher_unavailable`
-- **Temp/Commit Pattern**: Replace file operations with database transactions:
-  - Option A: Use database transactions (rollback = revert, commit = commit)
-  - Option B: Use session/staging tables that mirror main tables
-- **Solver Integration**: Maintain JSON interface for solver:
-  - Query DB → serialize to `AllData` JSON → pass to solver → parse result → update DB
-  - Solver remains completely unaware of database, continues to work with JSON I/O
-
-### Implementation Path
-1. **Database Layer** (Rust):
-   - Add `sqlx` or `diesel` to `src-tauri/Cargo.toml`
-   - Create `src-tauri/src/db/` module with connection pool and queries
-   - Implement serialization: DB rows → `AllData` struct (identical to current JSON deserialization)
-2. **Replace File Commands**:
-   - `load_data()`: Query all tables → assemble into `AllData`
-   - `save_temp_data()`: Write to staging tables or begin transaction
-   - `commit_data()`: Commit transaction or copy staging → main tables
-   - `clear_temp_data()`: Rollback transaction or clear staging tables
-   - Remove `import_data()`/`export_data()` - no longer needed
-3. **Update `main.rs`**:
-   - Initialize database connection pool in `setup()`
-   - Manage `AppState` with DB pool instead of file paths
-4. **No Frontend Changes**: `data.js` store continues to call same Tauri commands, receives identical `AllData` responses
+Application uses `tracing` + `tracing-subscriber` with custom log rotation:
+- **Location**: `%APPDATA%\Roaming\com.tsxb.course-scheduler\logs\`
+- **Format**: `course-scheduler-YYYY.MM.DD.log` (one file per day)
+- **Retention**: Keeps minimum 3 most recent files, deletes files older than 30 days
+- **Reopening**: Custom `ReopenableLogWriter` detects file deletion and recreates automatically
+- **Usage**: Import `tracing::{info, error, warn}` in Rust modules for structured logging
+- **Control**: Set `RUST_LOG` environment variable (e.g., `RUST_LOG=debug`) for verbosity
