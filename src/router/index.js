@@ -1,11 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import MainLayout from '../layouts/MainLayout.vue';
-import TeacherManagement from '../pages/TeacherManagement.vue';
-import CourseManagement from '../pages/CourseManagement.vue';
-import VenueManagement from '../pages/VenueManagement.vue';
-import CampusTimetable from '../pages/CampusTimetable.vue';
-import TeacherTimetable from '../pages/TeacherTimetable.vue';
-import Settings from '../pages/Settings.vue';
 
 const routes = [
   {
@@ -16,37 +10,37 @@ const routes = [
       {
         path: 'campus-timetable',
         name: 'CampusTimetable',
-        component: CampusTimetable,
+        component: () => import('../pages/CampusTimetable.vue'),
         meta: { title: '校区总课表' }
       },
       {
         path: 'teacher-timetable',
         name: 'TeacherTimetable',
-        component: TeacherTimetable,
+        component: () => import('../pages/TeacherTimetable.vue'),
         meta: { title: '教师个人课表' }
       },
       {
         path: 'teacher-management',
         name: 'TeacherManagement',
-        component: TeacherManagement,
+        component: () => import('../pages/TeacherManagement.vue'),
         meta: { title: '教师信息管理' }
       },
       {
         path: 'course-management',
         name: 'CourseManagement',
-        component: CourseManagement,
+        component: () => import('../pages/CourseManagement.vue'),
         meta: { title: '课程信息管理' }
       },
       {
         path: 'venue-management',
         name: 'VenueManagement',
-        component: VenueManagement,
+        component: () => import('../pages/VenueManagement.vue'),
         meta: { title: '场地/校区信息管理' }
       },
       {
         path: 'settings',
         name: 'Settings',
-        component: Settings,
+        component: () => import('../pages/Settings.vue'),
         meta: { title: '应用设置' }
       },
     ]
