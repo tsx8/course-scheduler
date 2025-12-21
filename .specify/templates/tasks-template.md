@@ -64,8 +64,9 @@ Examples of foundational tasks (adjust based on your project):
 
 Course Scheduler-specific examples:
 - [ ] T004 Update `AllData` schema in src-tauri/src/models.rs (if data model changes)
-- [ ] T005 [P] Update Python DataManager in solver/solver.py (if data model changes)
-- [ ] T006 [P] Update Pinia store types in src/stores/data.js (if data model changes)
+- [ ] T005 [P] Verify 3NF compliance for all new/modified database tables in src-tauri/schema.sql
+- [ ] T006 [P] Update Python DataManager in solver/solver.py (if data model changes)
+- [ ] T007 [P] Update Pinia store types in src/stores/data.js (if data model changes)
 - [ ] T007 Add new Tauri commands in src-tauri/src/main.rs or file_handler.rs
 - [ ] T008 Configure Vue Router for new pages (if adding navigation)
 - [ ] T009 Setup Naive UI components and theming for new UI elements

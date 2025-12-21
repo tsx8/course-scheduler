@@ -39,6 +39,7 @@
 - [ ] **Single Source of Truth**: Does this feature add state? If YES → identify authoritative storage location and read-only derivations
 - [ ] **Separation of Concerns**: Does this feature cross component boundaries? If YES → document interface contracts and version compatibility
 - [ ] **State Isolation & Revertibility**: Does this feature mutate user data? If YES → ensure temp/commit workflow support
+- [ ] **Relational Data Normalization**: Does this feature modify the database schema? If YES → verify all new/modified tables comply with 3NF (no transitive dependencies)
 
 ## Project Structure
 

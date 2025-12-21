@@ -97,6 +97,11 @@
 
 ### Key Entities *(include if feature involves data)*
 
+<!--
+  NOTE: All new entities and relationships MUST comply with Principle VII (3NF Normalization)
+  defined in .specify/memory/constitution.md.
+-->
+
 - **[Entity 1]**: [What it represents, key attributes without implementation]
 - **[Entity 2]**: [What it represents, relationships to other entities]
 

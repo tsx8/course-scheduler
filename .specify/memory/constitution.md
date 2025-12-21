@@ -1,19 +1,19 @@
 <!--
-Sync Impact Report - Version 2.1.0
+Sync Impact Report - Version 2.2.0
 =========================================
-Version Change: 2.0.0 → 2.1.0
-Rationale: MINOR version bump - Added explicit rule for Schedule Density as a manual constraint.
+Version Change: 2.1.0 → 2.2.0
+Rationale: MINOR version bump - Added Principle VII requiring 3NF normalization for all data models.
 
-Principles Modified:
-- III. Constraint Validation Alignment: Added rule specifying Schedule Density as a manual staff-defined constraint.
+Principles Modified: None
+Principles Added:
+- VII. Relational Data Normalization: Mandatory 3NF compliance for all database relationships.
 
-Principles Added: None
 Principles Removed: None
 
 Templates Status:
-✅ plan-template.md - No changes needed (Principle III check remains valid)
+✅ plan-template.md - Added 3NF compliance check
+✅ tasks-template.md - Added normalization verification tasks
 ✅ spec-template.md - No changes needed
-✅ tasks-template.md - No changes needed
 
 Follow-up Items: None
 
@@ -94,6 +94,18 @@ User-facing state changes MUST be isolated from committed data until explicitly 
 
 **Rationale**: Users need confidence to experiment without fear of data loss. Separating working state from committed state enables safe exploration and reduces user errors.
 
+### VII. Relational Data Normalization
+
+All database tables and relationships MUST be normalized to the Third Normal Form (3NF).
+
+- **3NF Compliance**: Every table MUST be in 3NF to prevent data redundancy and update anomalies.
+- **No Transitive Dependencies**: Non-key attributes MUST NOT depend on other non-key attributes; they must depend only on the primary key.
+- **Atomic Values**: Each column MUST contain only atomic (indivisible) values; no multi-valued attributes or nested tables.
+- **Primary Key Dependency**: Every non-key attribute MUST depend on the primary key, the whole primary key, and nothing but the primary key.
+- **Exception Documentation**: Any intentional deviation from 3NF (e.g., for performance optimization) MUST be explicitly documented and justified in the data model specification.
+
+**Rationale**: Normalization prevents data redundancy and update anomalies. In a complex scheduling system, ensuring 3NF simplifies the logic for cascading updates and maintains data integrity across the dual-table (temp/main) architecture.
+
 ## Governance
 
 ### Constitution Scope
@@ -116,18 +128,20 @@ This constitution defines **programming principles** that govern code quality, m
 ### Compliance Verification
 
 **Pre-Implementation** (in `specs/[###-feature]/plan.md`):
-- [ ] Constitution Check section completed for all six principles
+- [ ] Constitution Check section completed for all seven principles
 - [ ] Schema changes documented with triple-update plan (Principle I)
 - [ ] Referential integrity impact analyzed (Principle II)
 - [ ] Constraint alignment verified across layers (Principle III)
 - [ ] State source identified (Principle IV)
 - [ ] Component boundaries documented (Principle V)
 - [ ] Temp/commit workflow impact assessed (Principle VI)
+- [ ] **3NF Normalization**: Data model changes verified for 3NF compliance (Principle VII)
 
 **Post-Implementation**:
 - Code reviews MUST verify adherence to Principle I (cross-language schema sync) for data model changes
 - Constraint changes MUST be validated in both UI and solver (Principle III)
 - State mutations MUST flow through centralized store (Principle IV)
+- Database schema changes MUST be verified against 3NF rules (Principle VII)
 
 ### Documentation References
 
@@ -135,4 +149,4 @@ This constitution defines **programming principles** that govern code quality, m
 - **Build Instructions**: `README.md` (setup, dependencies, commands)
 - **Feature Specifications**: `specs/[###-feature]/spec.md` (requirements, acceptance criteria)
 
-**Version**: 2.1.0 | **Ratified**: 2025-12-19 | **Last Amended**: 2025-12-21
+**Version**: 2.2.0 | **Ratified**: 2025-12-19 | **Last Amended**: 2025-12-21

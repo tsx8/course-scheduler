@@ -18,6 +18,7 @@
 - **State**: Pinia store (`src/stores/data.js`) is the single source of truth.
 - **Venue Propagation**: Updating a course's venue automatically updates all teacher schedules (see `updateCourse` in `src/stores/data.js`).
 - **Schedule Density**: This is a **manual constraint** (specified by staff), NOT an auto-calculated value. It defines the maximum number of classes allowed per campus per time slot.
+- **Normalization**: All database tables and relationships MUST comply with the **Third Normal Form (3NF)**. No transitive dependencies or non-atomic values are allowed.
 
 ## Key Files & Directories
 - `src-tauri/src/db_handler.rs`: SQLite logic and temp-to-commit implementation.
