@@ -33,13 +33,13 @@
 
 **Required Compliance** (from `.specify/memory/constitution.md`):
 
-- [ ] **Cross-Language Schema Stability**: Does this feature modify shared data structures? If YES → document triple-update plan (Rust, Python, JavaScript)
-- [ ] **Referential Integrity Enforcement**: Does this feature introduce new data relationships? If YES → document cascading update strategy and orphan prevention
-- [ ] **Constraint Validation Alignment**: Does this feature add business rules? If YES → document enforcement in UI, backend, and solver layers
-- [ ] **Single Source of Truth**: Does this feature add state? If YES → identify authoritative storage location and read-only derivations
-- [ ] **Separation of Concerns**: Does this feature cross component boundaries? If YES → document interface contracts and version compatibility
-- [ ] **State Isolation & Revertibility**: Does this feature mutate user data? If YES → ensure temp/commit workflow support
-- [ ] **Relational Data Normalization**: Does this feature modify the database schema? If YES → verify all new/modified tables comply with 3NF (no transitive dependencies)
+- [ ] **Cross-Language Schema Stability**: Does this feature modify shared data structures? If YES → document quad-update plan (Rust models.rs, SQLite schema.sql, Python solver.py, JavaScript data.js)
+- [ ] **Referential Integrity Enforcement**: Does this feature introduce new data relationships? If YES → document cascading update strategy (ON DELETE CASCADE), orphan prevention, and venue propagation logic
+- [ ] **Constraint Validation Alignment**: Does this feature add business rules? If YES → document enforcement in UI (pre-validation), backend (Tauri commands), and solver (hard/soft constraints)
+- [ ] **Single Source of Truth**: Does this feature add state? If YES → identify authoritative storage location (Pinia store for frontend, main tables for database) and read-only derivations (computed properties)
+- [ ] **Separation of Concerns**: Does this feature cross component boundaries? If YES → document interface contracts (Tauri commands, JSON schemas) and version compatibility
+- [ ] **State Isolation & Revertibility**: Does this feature mutate user data? If YES → ensure writes go to temp tables, commit/revert UI buttons work correctly
+- [ ] **Relational Data Normalization**: Does this feature modify the database schema? If YES → verify all new/modified tables comply with 3NF (no transitive dependencies, junction tables only, no redundant attributes)
 
 ## Project Structure
 
