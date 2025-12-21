@@ -2,25 +2,25 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod db_handler;
+mod import_export;
 mod models;
 mod single_instance;
-mod import_export;
 
+use chrono::Local;
+use db_handler::AppState;
+use models::AllData;
+use rusqlite::Connection;
 use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Listener, Manager, State, WindowEvent};
-use models::AllData;
 use tauri_plugin_shell::ShellExt;
 use tokio::fs as async_fs;
-use rusqlite::Connection;
-use db_handler::AppState;
-use tracing::{info, error, warn};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing::{error, info, warn};
 use tracing_appender::non_blocking;
-use chrono::Local;
-use std::path::PathBuf;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 pub struct ShutdownState {
     is_closing_unconditionally: bool,
@@ -38,13 +38,13 @@ impl ReopenableLogWriter {
             .create(true)
             .append(true)
             .open(&log_path)?;
-        
+
         Ok(Self {
             log_path,
             file: Mutex::new(Some(file)),
         })
     }
-    
+
     fn ensure_file_exists(&self) -> io::Result<()> {
         // Check if file still exists
         if !self.log_path.exists() {
@@ -53,7 +53,7 @@ impl ReopenableLogWriter {
                 .create(true)
                 .append(true)
                 .open(&self.log_path)?;
-            
+
             let mut file_guard = self.file.lock().unwrap();
             *file_guard = Some(new_file);
             eprintln!("Log file recreated successfully");
@@ -69,15 +69,18 @@ impl Write for ReopenableLogWriter {
             eprintln!("Failed to reopen log file: {}", e);
             return Err(e);
         }
-        
+
         let mut file_guard = self.file.lock().unwrap();
         if let Some(ref mut file) = *file_guard {
             file.write(buf)
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "Log file not available"))
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Log file not available",
+            ))
         }
     }
-    
+
     fn flush(&mut self) -> io::Result<()> {
         let mut file_guard = self.file.lock().unwrap();
         if let Some(ref mut file) = *file_guard {
@@ -100,15 +103,15 @@ fn init_logging(logs_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let date_str = Local::now().format("%Y.%m.%d").to_string();
     let log_filename = format!("course-scheduler-{}.log", date_str);
     let log_path = logs_dir.join(&log_filename);
-    
+
     eprintln!("Creating log file: {}", log_path.display());
-    
+
     // Create custom reopenable writer
     let log_writer = ReopenableLogWriter::new(log_path.clone())?;
-    
+
     // Wrap in non-blocking writer for async writes
     let (non_blocking_writer, _guard) = non_blocking(log_writer);
-    
+
     // Store guard to prevent it from being dropped (which would stop logging)
     // We'll leak it intentionally since logging needs to persist for app lifetime
     std::mem::forget(_guard);
@@ -119,8 +122,7 @@ fn init_logging(logs_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         .with_writer(non_blocking_writer);
 
     // Use RUST_LOG env var or default to INFO level
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Build subscriber with file output
     tracing_subscriber::registry()
@@ -139,7 +141,7 @@ fn init_logging(logs_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 /// Deletes files older than 30 days
 fn cleanup_old_logs(logs_dir: &PathBuf) {
     info!("Starting log cleanup");
-    
+
     let entries = match fs::read_dir(logs_dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -151,7 +153,9 @@ fn cleanup_old_logs(logs_dir: &PathBuf) {
     let mut log_files: Vec<_> = entries
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
-            entry.path().extension()
+            entry
+                .path()
+                .extension()
                 .and_then(|ext| ext.to_str())
                 .map(|ext| ext == "log")
                 .unwrap_or(false)
@@ -181,7 +185,11 @@ fn cleanup_old_logs(logs_dir: &PathBuf) {
                     if age > thirty_days {
                         match fs::remove_file(entry.path()) {
                             Ok(_) => info!("Deleted old log file: {}", entry.path().display()),
-                            Err(e) => warn!("Failed to delete log file {}: {}", entry.path().display(), e),
+                            Err(e) => warn!(
+                                "Failed to delete log file {}: {}",
+                                entry.path().display(),
+                                e
+                            ),
                         }
                     }
                 }
@@ -205,9 +213,7 @@ fn open_logs_folder(app_handle: AppHandle) -> Result<(), String> {
         return Err("Logs directory does not exist".to_string());
     }
 
-    let logs_path = logs_dir
-        .to_str()
-        .ok_or("Logs path is not valid UTF-8")?;
+    let logs_path = logs_dir.to_str().ok_or("Logs path is not valid UTF-8")?;
 
     std::process::Command::new("explorer")
         .arg(logs_path)
@@ -223,57 +229,135 @@ fn has_unsaved_changes(state: State<'_, AppState>) -> bool {
     let db = state.db.lock().unwrap();
     check_has_unsaved(&db)
 }
-      
+
 #[command]
 async fn run_solver(
     app_handle: AppHandle,
     app_state: State<'_, AppState>,
 ) -> Result<AllData, String> {
     info!("Solver invoked");
-    
+
     // Load current data from database (temp tables if they exist, else main tables)
     let current_data = db_handler::load_data(app_state.clone()).await?;
-    info!("Loaded current data for solver: {} teachers, {} courses", 
-          current_data.teachers.len(), current_data.courses.len());
-    
+    info!(
+        "Loaded current data for solver: {} teachers, {} courses",
+        current_data.teachers.len(),
+        current_data.courses.len()
+    );
+    let mut legacy_json = serde_json::json!({
+        "time": current_data.time,
+        "day": current_data.day,
+        "campuses": [],
+        "courses": [],
+        "teachers": []
+    });
+
+    for campus in &current_data.campuses {
+        let mut c_json = serde_json::to_value(campus).unwrap();
+        let c_venues: Vec<_> = current_data
+            .venues
+            .iter()
+            .filter(|v| v.campus_id == campus.id)
+            .collect();
+        let c_density: Vec<_> = current_data
+            .schedule_density
+            .iter()
+            .filter(|d| d.campus_id == campus.id)
+            .collect();
+
+        c_json.as_object_mut().unwrap().insert(
+            "venues".to_string(),
+            serde_json::to_value(c_venues).unwrap(),
+        );
+        c_json.as_object_mut().unwrap().insert(
+            "schedule_density".to_string(),
+            serde_json::to_value(c_density).unwrap(),
+        );
+        legacy_json["campuses"].as_array_mut().unwrap().push(c_json);
+    }
+
+    for course in &current_data.courses {
+        let mut co_json = serde_json::to_value(course).unwrap();
+        let co_venues: Vec<_> = current_data
+            .course_venues
+            .iter()
+            .filter(|cv| cv.course_id == course.id)
+            .map(|cv| serde_json::json!({ "venue_id": cv.venue_id }))
+            .collect();
+
+        co_json.as_object_mut().unwrap().insert(
+            "place".to_string(),
+            serde_json::to_value(co_venues).unwrap(),
+        );
+        legacy_json["courses"].as_array_mut().unwrap().push(co_json);
+    }
+
+    for teacher in &current_data.teachers {
+        let mut t_json = serde_json::to_value(teacher).unwrap();
+        let teaches: Vec<_> = current_data
+            .teacher_courses
+            .iter()
+            .filter(|tc| tc.teacher_id == teacher.id)
+            .map(|tc| &tc.course_id)
+            .collect();
+        let unavailable: Vec<_> = current_data
+            .teacher_unavailability
+            .iter()
+            .filter(|tu| tu.teacher_id == teacher.id)
+            .collect();
+        let scheduled: Vec<_> = current_data
+            .scheduled_classes
+            .iter()
+            .filter(|sc| sc.teacher_id == teacher.id)
+            .collect();
+
+        t_json.as_object_mut().unwrap().insert(
+            "teaches".to_string(),
+            serde_json::to_value(teaches).unwrap(),
+        );
+        t_json.as_object_mut().unwrap().insert(
+            "unavailable".to_string(),
+            serde_json::to_value(unavailable).unwrap(),
+        );
+        t_json.as_object_mut().unwrap().insert(
+            "scheduled".to_string(),
+            serde_json::to_value(scheduled).unwrap(),
+        );
+        legacy_json["teachers"].as_array_mut().unwrap().push(t_json);
+    }
+
     // Create temporary JSON file for solver input
-    let app_data_dir = app_handle.path().app_data_dir().map_err(|_| "Could not get app data dir")?;
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Could not get app data dir")?;
     let input_path = app_data_dir.join("solver_input.tmp.json");
     let output_path = app_data_dir.join("solver_output.tmp.json");
-    
+
     // Write current data to input JSON
-    let json_content = serde_json::to_string(&current_data)
-        .map_err(|e| {
-            error!("Failed to serialize data for solver: {}", e);
-            format!("Failed to serialize data for solver: {}", e)
-        })?;
-    async_fs::write(&input_path, json_content)
+    async_fs::write(&input_path, serde_json::to_string(&legacy_json).unwrap())
         .await
-        .map_err(|e| {
-            error!("Failed to write solver input: {}", e);
-            format!("Failed to write solver input: {}", e)
-        })?;
+        .map_err(|e| format!("Failed to write solver input: {}", e))?;
 
     let (input_path_str, output_path_str) = (
-        input_path.to_str().ok_or("Input path is not valid UTF-8")?.to_string(),
-        output_path.to_str().ok_or("Output path is not valid UTF-8")?.to_string(),
+        input_path
+            .to_str()
+            .ok_or("Input path is not valid UTF-8")?
+            .to_string(),
+        output_path
+            .to_str()
+            .ok_or("Output path is not valid UTF-8")?
+            .to_string(),
     );
 
     info!("Executing solver with input: {}", input_path_str);
-    
+
     let sidecar_command = app_handle
         .shell()
         .sidecar("solver")
-        .map_err(|e| {
-            error!("Failed to create sidecar command: {}", e);
-            format!("Failed to create sidecar command: {}", e)
-        })?
+        .unwrap()
         .args([&input_path_str, &output_path_str]);
-
-    let output = sidecar_command.output().await.map_err(|e| {
-        error!("Failed to execute solver: {}", e);
-        format!("Failed to execute solver: {}", e)
-    })?;
+    let output = sidecar_command.output().await.map_err(|e| e.to_string())?;
 
     if !output.status.success() {
         let error_message = String::from_utf8_lossy(&output.stderr);
@@ -292,27 +376,21 @@ async fn run_solver(
 
     let result_content = async_fs::read_to_string(&output_path)
         .await
-        .map_err(|e| {
-            error!("Failed to read solver output file: {}", e);
-            format!("Failed to read solver output file: {}", e)
-        })?;
-    
-    // Clean up temporary files
+        .map_err(|e| e.to_string())?;
+    let raw_solved_json: serde_json::Value =
+        serde_json::from_str(&result_content).map_err(|e| e.to_string())?;
+
+    let normalized_json = import_export::process_json_format(raw_solved_json);
+
+    let solved_data: AllData = serde_json::from_value(normalized_json)
+        .map_err(|e| format!("Failed to parse normalized solver output: {}", e))?;
+
+    // 5. 保存并返回
+    db_handler::save_temp_data(solved_data.clone(), app_handle, app_state).await?;
+
     let _ = async_fs::remove_file(&input_path).await;
     let _ = async_fs::remove_file(&output_path).await;
 
-    let solved_data: AllData = serde_json::from_str(&result_content)
-        .map_err(|e| {
-            error!("Failed to parse solver output JSON: {}", e);
-            format!("Failed to parse solver output JSON: {}", e)
-        })?;
-
-    info!("Solver completed successfully, saving results to temp tables");
-    
-    // Save solved data to temp tables (for review/commit)
-    db_handler::save_temp_data(solved_data.clone(), app_handle, app_state).await?;
-
-    info!("Solver results saved to temp tables");
     Ok(solved_data)
 }
 
@@ -416,7 +494,7 @@ fn main() {
                 eprintln!("Failed to initialize logging: {}", e);
                 // Continue without logging - not critical
             }
-            
+
             // Clean up old log files
             cleanup_old_logs(&logs_dir);
 
@@ -450,7 +528,7 @@ fn main() {
             // Open or create SQLite database
             let db_path = data_dir.join("course_scheduler.db");
             info!("Opening database at: {}", db_path.display());
-            
+
             let conn = Connection::open(&db_path)
                 .map_err(|e| {
                     error!("无法打开数据库: {}\n数据库文件: {}", e, db_path.display());
@@ -465,8 +543,7 @@ fn main() {
 
             // Initialize database schema
             info!("Initializing database schema");
-            db_handler::init_database(&conn)
-                .expect("Failed to initialize database schema");
+            db_handler::init_database(&conn).expect("Failed to initialize database schema");
 
             // Migrate from JSON if needed
             info!("Checking for JSON migration");
@@ -475,10 +552,12 @@ fn main() {
                     if migrated {
                         info!("Successfully migrated data from JSON to SQLite");
                         println!("Successfully migrated data from JSON to SQLite");
-                        
+
                         if let Some(stats) = stats_opt {
-                            info!("Migration stats: {} teachers, {} courses, {} schedules",
-                                  stats.teachers, stats.courses, stats.schedules);
+                            info!(
+                                "Migration stats: {} teachers, {} courses, {} schedules",
+                                stats.teachers, stats.courses, stats.schedules
+                            );
                         }
                     } else {
                         info!("No JSON migration needed");
@@ -486,7 +565,10 @@ fn main() {
                 }
                 Err(e) => {
                     error!("Migration failed: {}", e);
-                    eprintln!("Warning: Migration failed, starting with empty database: {}", e);
+                    eprintln!(
+                        "Warning: Migration failed, starting with empty database: {}",
+                        e
+                    );
                 }
             }
 
@@ -551,7 +633,7 @@ fn main() {
                         let monitor_list: Vec<_> = monitors.into_iter().collect();
                         info!("[CLOSE] Available monitors: {} total", monitor_list.len());
                     }
-                    
+
                     let app_state = window.state::<AppState>();
                     let shutdown_state = window.state::<Arc<Mutex<ShutdownState>>>();
                     let mut is_closing = false;
@@ -583,7 +665,7 @@ fn main() {
                             }
                         }
                     };
-                    
+
                     if has_unsaved {
                         info!("Window close requested - has unsaved changes, showing dialog");
                         api.prevent_close();
