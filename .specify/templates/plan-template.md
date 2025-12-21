@@ -33,11 +33,12 @@
 
 **Required Compliance** (from `.specify/memory/constitution.md`):
 
-- [ ] **Data Model Integrity**: Does this feature modify `AllData` schema? If YES → document triple-update plan (Rust models, Python DataManager, frontend store)
-- [ ] **Standalone Deployment**: Does this feature introduce external dependencies? If YES → must be bundled or rejected
-- [ ] **User-Centric Operations**: Are all user interactions GUI-based? Command-line operations acceptable ONLY for development/debug
-- [ ] **Solver Integration**: Does this feature affect scheduling constraints? If YES → document solver logic changes and test with sample data
-- [ ] **Version Management**: Does this feature support the temp/commit workflow? All state mutations must write to `data.tmp.json` via Pinia auto-save
+- [ ] **Cross-Language Schema Stability**: Does this feature modify shared data structures? If YES → document triple-update plan (Rust, Python, JavaScript)
+- [ ] **Referential Integrity Enforcement**: Does this feature introduce new data relationships? If YES → document cascading update strategy and orphan prevention
+- [ ] **Constraint Validation Alignment**: Does this feature add business rules? If YES → document enforcement in UI, backend, and solver layers
+- [ ] **Single Source of Truth**: Does this feature add state? If YES → identify authoritative storage location and read-only derivations
+- [ ] **Separation of Concerns**: Does this feature cross component boundaries? If YES → document interface contracts and version compatibility
+- [ ] **State Isolation & Revertibility**: Does this feature mutate user data? If YES → ensure temp/commit workflow support
 
 ## Project Structure
 

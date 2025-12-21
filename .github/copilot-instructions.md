@@ -22,6 +22,17 @@ This enables:
 - Clean separation between working state and committed state
 - Transactional safety via SQLite ACID guarantees
 
+## Project Scope & Constraints
+
+### Platform Support
+**Windows 10+ ONLY** - Despite Tauri 2's cross-platform capabilities, this project targets Windows exclusively for optimal GUI experience. Do not invest time in macOS/Linux compatibility.
+
+### Solver Development
+**OFF-LIMITS on main branch** - All solver improvements (`solver/solver.py`, constraint logic, optimization weights) are handled by a dedicated collaborator. Do not modify solver code unless explicitly working on a solver-specific branch.
+
+### Testing Strategy
+**Manual testing only** - No automated test suite due to rapid development timeline. Focus on implementation and manual verification rather than test infrastructure.
+
 ## Critical Developer Workflows
 
 ### Building for Production
@@ -34,23 +45,24 @@ This automatically:
 3. Bundles Vite frontend + Rust backend + solver + SQLite into single executable
 
 ### Dev Environment Setup
-1. Install Rust, Node.js, and Python 3.11+
-2. Install `uv` (Python package manager): `pip install uv`
+1. Install Rust (via [rustup](https://rustup.rs/)), Node.js 18+, and Python 3.11+
+2. Install `uv` (fast Python package manager): `pip install uv`
 3. Run `npm install` for frontend deps
-4. Run `uv sync` in project root (installs Python deps via `pyproject.toml`)
-5. Run `npm run build:solver` before first dev run
-6. Run `npm run tauri dev` (auto-runs solver build + Vite dev server)
+4. Run `uv sync` in project root (creates `.venv`, installs OR-Tools + PyInstaller from `pyproject.toml`)
+5. Run `npm run build:solver` before first dev run (builds Python binary)
+6. Run `npm run tauri dev` (auto-runs solver build + Vite dev server via `beforeDevCommand`)
 
 ### Database Location (Windows)
 - **Production**: `%APPDATA%\Roaming\com.tsxb.course-scheduler\course_scheduler.db`
 - **Logs**: `%APPDATA%\Roaming\com.tsxb.course-scheduler\logs\course-scheduler-YYYY.MM.DD.log`
 - **First Launch**: Automatically migrates old `data.json` → SQLite, creates backup as `data.json.backup-YYYYMMDD-HHMMSS`
 
-### Solver Development Cycle
-- Edit `solver/solver.py` (OR-Tools constraint model)
-- Rebuild: `cd solver && uv run pyinstaller solver.spec && cd .. && node scripts/prepare-solver.js`
-- Test in app: trigger "自动排课" (Auto Schedule) button in UI
-- Solver still uses JSON I/O (Rust serializes DB → JSON → passes to solver → parses result → writes to DB)
+### Solver Development Cycle (Collaborator Only)
+**Do not modify solver code on main branch** - this is handled by a dedicated collaborator.
+- Solver code: `solver/solver.py` (OR-Tools constraint model)
+- Rebuild process: `cd solver && uv run pyinstaller solver.spec && cd .. && node scripts/prepare-solver.js`
+- Test trigger: "自动排课" (Auto Schedule) button in UI
+- I/O: Solver uses JSON (Rust serializes DB → JSON → solver → JSON result → DB)
 
 ## Data Model (Shared JSON Schema)
 
@@ -74,6 +86,9 @@ The entire app revolves around `AllData` structure defined in **both** `src-taur
 ### Key Constraint: Two-Campus Rule
 - Teachers with `is_only_shahe: true` can only teach at Shahe campus (hardcoded ID: `138697dc-1591-4c16-b60e-d0057964be56`)
 - Others **must** teach at **both** campuses (hard constraint in solver, lines 180-195)
+- Solver enforces: teachers can only be at one campus per day (venue-to-campus mapping)
+- Teachers already scheduled at 4+ different days cannot receive new days (hard cap)
+- **Note**: Campus ID hardcoding is planned for future improvement but not a priority - solver changes are collaborator's responsibility
 
 ## Python Solver Integration
 
@@ -103,6 +118,8 @@ The entire app revolves around `AllData` structure defined in **both** `src-taur
 - **Load**: `invoke('load_data')` fetches from SQLite (temp tables if exist, else main tables)
 - **Revert**: `revertChanges()` clears temp tables, reloads from main tables
 - **Commit**: `commitChanges()` copies temp tables → main tables
+- **Event system**: Listens to `commit-completed` event from Rust backend after successful commit
+- **Solving state**: `isSolving` ref prevents UI changes during solver execution
 
 ### Critical: Venue Update Propagation
 When a course's venue changes (lines 150-210 in `data.js`), the store automatically updates all teacher schedules with "smart replacement" logic:
@@ -137,20 +154,15 @@ All pages in `src/pages/` follow this pattern:
 - `export_database(file_path)`: Copy entire database file (main + temp tables)
 
 **Solver** (`src-tauri/src/main.rs`):
-- `run_solver()`: Spawns Python binary, handles I/O, returns solved AllData
-- `finalize_and_close(save)`: Commit/discard on app exit
+- `run_solver()`: Spawns Python binary as sidecar, pipes JSON I/O, returns solved AllData
+- `finalize_and_close(save)`: Commit/discard on app exit (called from close dialog in `MainLayout.vue`)
+
+**Window Management**:
+- Custom titlebar (via `decorations: false`) with minimize/maximize/close in `MainLayout.vue`
+- Close button triggers `show-close-dialog` event → displays save prompt → calls `finalize_and_close`
 
 **Utilities**:
 - `open_logs_folder()`: Opens log directory in file explorer
-
-## Testing the Solver
-
-Manual test workflow:
-1. Create test data via UI (teachers, courses, venues)
-2. Click "自动排课" and wait for solution
-3. Check console for solver stats (objective value, class assignments)
-4. If no solution: relax constraints (increase max_teaching_hours, add venues, reduce unavailable slots)
-5. Revert if unsatisfied, iterate on solver weights in `solver.py:422`
 
 ## Database Schema Reference
 
@@ -186,23 +198,23 @@ On first run, if database is empty and `data.json` exists:
 4. Backup original as `data.json.backup-YYYYMMDD-HHMMSS` in new AppData location
 5. Clear temp tables to ensure clean state
 
-Migration code in `src-tauri/src/db_handler.rs` lines 45-200.
-
 ## Common Gotchas
 
-- **Solver timeout**: 60s limit in `solver.py:437`. Increase for complex schedules.
-- **OR-Tools binary paths**: Windows paths differ; `solver.spec` detects `.pyd` files.
-- **ID consistency**: All IDs are UUIDs generated via `uuid.v4()` in JS, must match across entities.
-- **Campus hardcoding**: Shahe campus ID is hardcoded in solver (line 172). Update if campus list changes.
-- **Build order**: Always `build:solver` before `tauri build/dev` or sidecar will fail.
-- **Database locks**: SQLite uses `Mutex<Connection>` - avoid long-running operations in Tauri commands.
-- **Foreign key constraints**: Enabled in `schema.sql` - deletions cascade automatically.
+- **Platform-specific**: Windows 10+ only - don't add cross-platform code or test on macOS/Linux
+- **Solver is off-limits**: Never modify `solver/solver.py` or constraint logic on main branch - collaborator's responsibility
+- **No automated tests**: Manual testing only - don't create test suites or CI/CD test pipelines
+- **ID consistency**: All IDs are UUIDs generated via `uuid.v4()` in JS, must match across entities
+- **Build order**: Always `build:solver` before `tauri build/dev` or sidecar will fail
+- **Database locks**: SQLite uses `Mutex<Connection>` - avoid long-running operations in Tauri commands
+- **Foreign key constraints**: Enabled in `schema.sql` - deletions cascade automatically
+- **PyInstaller caching**: Delete `solver/build/` and `solver/dist/` if solver changes don't take effect
+- **Event listeners**: Set up in `data.js` after initialization - ensure `listen()` calls don't duplicate on hot reload
 
 ## File Ownership Guide
 
-- **Solver logic**: Only modify `solver/solver.py`, never touch generated `build/` or `dist/`
+- **Solver logic**: **OFF-LIMITS** - `solver/solver.py` and related files are collaborator's domain, do not modify on main
 - **Database schema**: Update BOTH `src-tauri/schema.sql` AND `src-tauri/src/db_handler.rs` serialization logic
-- **Data model changes**: Update BOTH `src-tauri/src/models.rs` AND `solver/solver.py` DataManager
+- **Data model changes**: Update `src-tauri/src/models.rs` (solver model sync is collaborator's job)
 - **UI pages**: Independent, no shared state beyond Pinia store
 - **Tauri commands**: Add to `db_handler.rs`, `import_export.rs`, or `main.rs`, register in `main.rs`
 

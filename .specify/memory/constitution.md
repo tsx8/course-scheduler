@@ -1,157 +1,151 @@
 <!--
-Sync Impact Report - Version 1.0.0
+Sync Impact Report - Version 2.0.0
 =========================================
-Version Change: Initial → 1.0.0
-Rationale: Initial constitution establishment for Course Scheduler project
+Version Change: 1.0.0 → 2.0.0
+Rationale: MAJOR version bump - Complete restructure to focus on programming principles rather than implementation details. Removed technology stack specifics (moved to copilot-instructions.md).
 
-Principles Defined:
-- I. Data Model Integrity (NEW) - Core principle ensuring data model stability
-- II. Standalone Deployment (NEW) - Zero-dependency end-user deployment
-- III. User-Centric Operations (NEW) - GUI-first, non-technical user friendly
-- IV. Solver Integration (NEW) - Python solver as embedded component
-- V. Version Management & Revertibility (NEW) - Temp/commit workflow pattern
+Principles Modified:
+- I. Data Model Integrity → Cross-Language Schema Stability (renamed, clarified synchronization requirements)
+- II. Standalone Deployment → REMOVED (implementation detail, not a programming principle)
+- III. User-Centric Operations → REMOVED (UI/UX guideline, not a programming principle)
+- IV. Solver Integration → REMOVED (architectural detail, not a programming principle)
+- V. Version Management & Revertibility → State Isolation & Revertibility (renamed, clarified as general pattern)
+
+Principles Added:
+- II. Referential Integrity Enforcement (NEW) - Cascading updates and orphan prevention
+- III. Constraint Validation Alignment (NEW) - Multi-layer validation consistency
+- IV. Single Source of Truth (NEW) - Authoritative state management
+- V. Separation of Concerns (NEW) - Clear component boundaries
+- VI. State Isolation & Revertibility (from old V, renamed)
+
+Section Changes:
+- REMOVED: "Deployment Requirements" (moved to copilot-instructions.md)
+- REMOVED: "Development Workflow" (moved to copilot-instructions.md)
+- REMOVED: "Technology Stack Constraints" (moved to copilot-instructions.md)
+- UPDATED: "Governance" section clarified to reference implementation docs
 
 Templates Status:
-✅ plan-template.md - Updated constitution check references
-✅ spec-template.md - User story structure aligns with GUI operations
-✅ tasks-template.md - Task organization supports feature independence
+✅ plan-template.md - Constitution check now references programming principles only
+✅ spec-template.md - No changes needed (user story structure unaffected)
+✅ tasks-template.md - No changes needed (task organization unaffected)
 
-Follow-up Items: None - all placeholders resolved
+Follow-up Items: None - all principles now properly scoped to programming practices
 
-Last Updated: 2025-12-19
+Last Updated: 2025-12-21
 -->
 
 # Course Scheduler Constitution
 
 ## Core Principles
 
-### I. Data Model Integrity (NON-NEGOTIABLE)
+### I. Cross-Language Schema Stability
 
-The data model (`AllData` structure) is the foundation of this project and MUST remain stable across all changes.
+The shared data model MUST remain consistent across all language boundaries.
 
-- **Immutable Contract**: The `AllData` schema (defined in `src-tauri/src/models.rs`) serves as the contract between frontend (Vue/Pinia), backend (Rust), and solver (Python)
-- **Schema Changes Require Triple-Update**: Any modification to data entities (teachers, courses, campuses, venues, time slots, days, schedules) MUST be reflected in:
-  1. Rust models (`src-tauri/src/models.rs`)
-  2. Python solver dataclass (`solver/solver.py` DataManager)
-  3. Frontend store types (`src/stores/data.js`)
-- **Backward Compatibility**: When migrating persistence layers (e.g., JSON → PostgreSQL), the `AllData` interface MUST NOT change
-- **Validation**: All data mutations must preserve referential integrity (course venues, teacher schedules, campus associations)
+- **Synchronized Definitions**: Any data structure used across multiple languages (Rust, Python, JavaScript) MUST have identical field names, types, and semantics
+- **Triple-Update Rule**: Changes to shared entities require synchronous updates in all three language implementations:
+  1. Backend serialization layer (Rust)
+  2. Computation layer (Python)
+  3. Frontend state layer (JavaScript)
+- **Explicit Migration**: Schema changes must include migration logic; breaking changes are forbidden without version negotiation
+- **Validation at Boundaries**: Each language boundary MUST validate incoming data structure integrity
 
-**Rationale**: The data model spans three languages and multiple subsystems; breaking changes cascade catastrophically across the entire application.
+**Rationale**: Multi-language architectures fail catastrophically when shared data contracts drift. Preventing desynchronization is cheaper than debugging cross-language data corruption.
 
-### II. Standalone Deployment
+### II. Referential Integrity Enforcement
 
-End users MUST be able to use the application without installing any external dependencies.
+Data relationships MUST be enforced programmatically, not assumed.
 
-- **Single Executable**: The build output is a single installer/executable containing:
-  - Tauri application (Rust backend + Vue frontend)
-  - Embedded Python solver binary (compiled via PyInstaller)
-  - All runtime dependencies bundled
-- **No Runtime Prerequisites**: Users do NOT need Python, Node.js, or SQL databases installed
-- **Embedded Solver**: The OR-Tools Python solver is deployed as a sidecar binary (managed via Tauri `externalBin` configuration)
-- **File-Based Persistence**: Default storage uses JSON files (`data.json`, `data.tmp.json`) requiring no database setup
+- **Cascading Updates**: Changes to referenced entities (e.g., venue assignments) MUST automatically propagate to dependent data (e.g., scheduled classes)
+- **Orphan Prevention**: Deletions of referenced entities MUST either cascade to dependents or block if dependencies exist
+- **Relationship Validation**: Foreign key relationships must be verified before mutation operations
+- **Automatic Cleanup**: When a reference becomes invalid, the system MUST either repair or remove the broken link—never leave orphaned data
 
-**Rationale**: Target users are academic affairs staff with minimal technical expertise; reducing friction is critical for adoption.
+**Rationale**: Broken references create silent data corruption that manifests as user-visible bugs. Proactive enforcement prevents data inconsistency states.
 
-### III. User-Centric Operations
+### III. Constraint Validation Alignment
 
-The application prioritizes GUI-based workflows for non-technical users.
+Business constraints MUST be enforced consistently across all system layers.
 
-- **Direct Manipulation**: Core operations (CRUD on courses, teachers, venues) use GUI controls (forms, drag-drop, clicks) instead of command-line or text editing
-- **Visual Feedback**: Data views (timetables, schedules) use tables, calendars, and interactive components (Naive UI)
-- **Forgiving UX**: The temp/commit pattern (Principle V) enables experimentation without fear of data loss
-- **Export/Import**: Results can be exported to common formats (CSV, Excel) for external use
+- **UI Pre-Validation**: User interface MUST prevent invalid operations before submission (e.g., disable unavailable time slots)
+- **Backend Enforcement**: Server/backend MUST re-validate all constraints regardless of UI state (defense in depth)
+- **Solver Consistency**: Constraint solver MUST encode the same business rules as UI validations (e.g., teacher availability, venue capacity)
+- **Single Rule Definition**: Constraints should be defined once and referenced by all layers, not duplicated in code
 
-**Rationale**: Academic staff need productivity tools, not developer tools. The UI must match spreadsheet-like familiarity.
+**Rationale**: Inconsistent constraint enforcement leads to user confusion ("why did the UI allow me to do X if the solver rejects it?"). Alignment eliminates contradictory behaviors.
 
-### IV. Solver Integration
+### IV. Single Source of Truth
 
-The automatic scheduling feature is powered by a Python-based constraint solver that operates as an independent subprocess.
+Each piece of application state MUST have exactly one authoritative location.
 
-- **Separation of Concerns**: The solver (`solver/solver.py`) is a standalone component communicating via JSON I/O
-- **Constraint Model Transparency**: The CP-SAT model encodes domain rules (teacher availability, venue capacity, campus restrictions) that MUST align with UI-level validations
-- **Sidecar Architecture**: Rust spawns the solver as a child process, passing input via stdin/file and reading output from stdout/file
-- **Build Integration**: Solver compilation (`npm run build:solver`) is part of the CI/CD pipeline, ensuring binary availability before Tauri build
+- **Unidirectional State Flow**: Derived state must be computed from the source, never stored redundantly
+- **No Duplicate Storage**: The same logical data MUST NOT exist in multiple independent stores
+- **Centralized Mutations**: State changes must flow through a single entry point (e.g., Pinia store actions)
+- **Read-Only Derivations**: Computed values must be read-only projections of authoritative state
 
-**Rationale**: OR-Tools is Python-native; embedding via PyInstaller is more practical than Rust bindings while maintaining clean separation.
+**Rationale**: Duplicate state inevitably desynchronizes. Single source of truth eliminates entire classes of synchronization bugs.
 
-### V. Version Management & Revertibility
+### V. Separation of Concerns
 
-All edits follow an "optimistic temp-to-commit" pattern to enable safe experimentation.
+System components MUST have clear boundaries and minimal coupling.
 
-- **Temporary State**: Changes are immediately saved to `data.tmp.json` (via debounced auto-save in Pinia store)
-- **Explicit Commit**: Users explicitly invoke "Commit" to promote `data.tmp.json` → `data.json`
-- **Instant Revert**: Users can discard all temporary changes and reload from `data.json` at any time
-- **Solver Integration**: Automatic scheduling operates on temp data; results are written to temp and require commit to persist
-- **State Isolation**: The working state (`data.tmp.json`) never affects the last-known-good state (`data.json`) until user confirmation
+- **Component Independence**: Each subsystem (UI, backend, computation) should be replaceable without rewriting others
+- **Interface Contracts**: Communication between components must use well-defined, versioned interfaces (e.g., JSON schemas)
+- **Functional Isolation**: A component's internal implementation MUST NOT leak into other components' logic
+- **Dependency Inversion**: High-level components depend on abstractions, not concrete implementations
 
-**Rationale**: Academic scheduling involves trial-and-error; the ability to safely explore alternatives without corrupting production data is essential.
+**Rationale**: Tight coupling creates brittle systems where changes cascade unpredictably. Clear boundaries enable independent evolution and testing.
 
-## Deployment Requirements
+### VI. State Isolation & Revertibility
 
-### Technology Stack Constraints
+User-facing state changes MUST be isolated from committed data until explicitly confirmed.
 
-- **Frontend**: Vue 3, Vite, Naive UI, Pinia (state management)
-- **Backend**: Rust (Tauri 2.x framework)
-- **Solver**: Python 3.11+ with OR-Tools, compiled via PyInstaller
-- **Packaging**: Tauri bundler for Windows (MSI/EXE installers)
-- **Build Tools**: npm, uv (Python package manager), Rust toolchain
+- **Optimistic Temporary State**: All user edits write to temporary storage (temp tables, temp files) immediately
+- **Explicit Commit Boundary**: Promotion from temporary to permanent storage requires explicit user action
+- **Instant Rollback**: Users can discard all temporary changes and restore the last committed state at any time
+- **Transaction Safety**: Temporary state and permanent state must never mix—operations are atomic (all-or-nothing)
 
-### Build Pipeline
-
-1. **Solver Compilation**: `npm run build:solver` → PyInstaller → `solver/dist/solver.exe`
-2. **Binary Preparation**: `node scripts/prepare-solver.js` → Copy to `src-tauri/binaries/`
-3. **Tauri Build**: `npm run tauri build` → Bundle frontend + backend + solver → Installer
-
-### Performance Standards
-
-- **Solver Timeout**: 60 seconds for constraint solving (configurable in `solver.py`)
-- **UI Responsiveness**: Main thread never blocked by solver execution (runs as background process)
-- **Data Load Time**: < 1 second for typical datasets (100 teachers, 200 courses)
-- **Auto-Save Debounce**: 100ms delay to batch rapid edits
-
-## Development Workflow
-
-### Pre-Development Checklist
-
-- [ ] Verify Rust, Node.js, Python 3.11+, and `uv` are installed
-- [ ] Run `npm install` to install frontend dependencies
-- [ ] Run `npm run build:solver` to compile Python solver
-- [ ] Confirm `src-tauri/binaries/solver-*.exe` exists before `npm run tauri dev`
-
-### Change Management
-
-- **Data Model Changes**: Follow Principle I triple-update requirement; update tests for all three layers
-- **Solver Logic Changes**: Edit `solver/solver.py`, rebuild via `npm run build:solver`, test via UI "Auto Schedule" button
-- **UI Component Changes**: Leverage Pinia store reactivity; ensure auto-save triggers correctly
-- **Tauri Commands**: Add/modify in `src-tauri/src/file_handler.rs` or `main.rs`; register in `main.rs` invocation handler
-
-### Testing Strategy
-
-- **Manual Testing**: Primary validation method due to GUI-heavy nature
-- **Solver Validation**: Run solver with sample data, verify constraint satisfaction and objective value
-- **Integration Points**: Test temp/commit workflow, solver I/O serialization, file operations
-- **Edge Cases**: Empty datasets, maximum capacity schedules, solver timeouts, corrupted JSON recovery
+**Rationale**: Users need confidence to experiment without fear of data loss. Separating working state from committed state enables safe exploration and reduces user errors.
 
 ## Governance
 
-This constitution supersedes all other development practices. All code changes, architectural decisions, and feature implementations MUST comply with the five core principles.
+### Constitution Scope
+
+This constitution defines **programming principles** that govern code quality, maintainability, and correctness. It does NOT prescribe:
+- Technology stack choices (see `.github/copilot-instructions.md` for implementation details)
+- Development workflows (see `.github/copilot-instructions.md` for build processes)
+- UI/UX guidelines (handled in design specifications)
 
 ### Amendment Process
 
-1. Proposed changes must document impact on existing principles
-2. Breaking changes to Principle I (Data Model Integrity) require major version bump (e.g., 1.x.x → 2.0.0)
-3. New principles or governance sections require minor version bump (e.g., 1.0.x → 1.1.0)
-4. Clarifications and non-semantic edits require patch version bump (e.g., 1.0.0 → 1.0.1)
+1. **Proposed Change**: Document the principle change, affected code, and migration path
+2. **Version Bump Rules**:
+   - **MAJOR** (X.0.0): Add/remove/redefine principles; backward-incompatible changes
+   - **MINOR** (x.Y.0): Expand existing principles; add clarifying sections
+   - **PATCH** (x.y.Z): Fix typos; reword without semantic change
+3. **Validation**: Update all template constitution checks to reflect new/changed principles
+4. **Propagation**: Review existing code for compliance; document technical debt if non-compliant
 
 ### Compliance Verification
 
-- All feature implementations must reference applicable principles in their specification (`specs/*/spec.md`)
-- Code reviews must verify adherence to Principle I (data model consistency) and Principle II (standalone deployment)
-- Breaking changes to the `AllData` schema require review of all dependent files (Rust models, Python DataManager, frontend stores)
+**Pre-Implementation** (in `specs/[###-feature]/plan.md`):
+- [ ] Constitution Check section completed for all six principles
+- [ ] Schema changes documented with triple-update plan (Principle I)
+- [ ] Referential integrity impact analyzed (Principle II)
+- [ ] Constraint alignment verified across layers (Principle III)
+- [ ] State source identified (Principle IV)
+- [ ] Component boundaries documented (Principle V)
+- [ ] Temp/commit workflow impact assessed (Principle VI)
 
-### Runtime Guidance
+**Post-Implementation**:
+- Code reviews MUST verify adherence to Principle I (cross-language schema sync) for data model changes
+- Constraint changes MUST be validated in both UI and solver (Principle III)
+- State mutations MUST flow through centralized store (Principle IV)
 
-For agent-specific implementation instructions, refer to `.github/copilot-instructions.md` (contains architecture details, build workflows, and developer workflows).
+### Documentation References
 
-**Version**: 1.0.0 | **Ratified**: 2025-12-19 | **Last Amended**: 2025-12-19
+- **Implementation Details**: `.github/copilot-instructions.md` (architecture, tech stack, workflows)
+- **Build Instructions**: `README.md` (setup, dependencies, commands)
+- **Feature Specifications**: `specs/[###-feature]/spec.md` (requirements, acceptance criteria)
+
+**Version**: 2.0.0 | **Ratified**: 2025-12-19 | **Last Amended**: 2025-12-21
