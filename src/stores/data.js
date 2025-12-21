@@ -19,14 +19,22 @@ export const useDataStore = defineStore('data', () => {
     const teachers = ref([]);
     const courses = ref([]);
     const campuses = ref([]);
+    const venues = ref([]);
     const time = ref([]);
-    const isReverting = ref(false);
     const day = ref([]);
+    const isReverting = ref(false);
     const isSolving = ref(false);
+
+    // Normalized relationship arrays
+    const courseVenues = ref([]);
+    const teacherCourses = ref([]);
+    const scheduledClasses = ref([]);
+    const teacherUnavailability = ref([]);
+    const scheduleDensity = ref([]);
 
     const selectedCampusIdForCampusView = ref(null);
     const selectedTeacherIdForTeacherView = ref(null);
-    const selectedVenueIdForCampusView = ref(null); 
+    const selectedVenueIdForCampusView = ref(null);
 
     const debouncedSave = debounce(async (data) => {
         console.log('Saving temp data to backend...');
@@ -35,8 +43,14 @@ export const useDataStore = defineStore('data', () => {
                 teachers: toRaw(data.teachers),
                 courses: toRaw(data.courses),
                 campuses: toRaw(data.campuses),
+                venues: toRaw(data.venues),
                 time: toRaw(data.time),
                 day: toRaw(data.day),
+                course_venues: toRaw(data.courseVenues),
+                teacher_courses: toRaw(data.teacherCourses),
+                scheduled_classes: toRaw(data.scheduledClasses),
+                teacher_unavailability: toRaw(data.teacherUnavailability),
+                schedule_density: toRaw(data.scheduleDensity),
             };
             await invoke('save_temp_data', { content: rawData });
             console.log('Temp data saved successfully.');
@@ -56,7 +70,7 @@ export const useDataStore = defineStore('data', () => {
 
             isInitialized.value = true;
             console.log('Data initialized successfully.');
-            
+
             // Set up event listener for commit-completed (T027)
             listen('commit-completed', () => {
                 console.log('Commit completed event received');
@@ -71,8 +85,14 @@ export const useDataStore = defineStore('data', () => {
                     teachers: teachers.value,
                     courses: courses.value,
                     campuses: campuses.value,
+                    venues: venues.value,
                     time: time.value,
-                    day: day.value
+                    day: day.value,
+                    courseVenues: courseVenues.value,
+                    teacherCourses: teacherCourses.value,
+                    scheduledClasses: scheduledClasses.value,
+                    teacherUnavailability: teacherUnavailability.value,
+                    scheduleDensity: scheduleDensity.value
                 }),
                 (newState) => {
                     if (!isInitialized.value || isReverting.value) return;
@@ -89,13 +109,41 @@ export const useDataStore = defineStore('data', () => {
     const replaceAllData = (newData) => {
         teachers.value = newData.teachers || [];
         courses.value = newData.courses || [];
-        campuses.value = (newData.campuses || []).map(c => ({
-            ...c,
-            schedule_density: c.schedule_density || []
-        }));
+        campuses.value = newData.campuses || [];
+        venues.value = newData.venues || [];
         time.value = newData.time || [];
         day.value = newData.day || [];
+        courseVenues.value = newData.course_venues || [];
+        teacherCourses.value = newData.teacher_courses || [];
+        scheduledClasses.value = newData.scheduled_classes || [];
+        teacherUnavailability.value = newData.teacher_unavailability || [];
+        scheduleDensity.value = newData.schedule_density || [];
     };
+
+    // Computed properties for normalized data relationships
+    const venuesByCampus = computed(() => (campusId) => {
+        return venues.value.filter(v => v.campus_id === campusId);
+    });
+
+    const courseVenuesByCourse = computed(() => (courseId) => {
+        return courseVenues.value.filter(cv => cv.course_id === courseId);
+    });
+
+    const teacherCoursesByTeacher = computed(() => (teacherId) => {
+        return teacherCourses.value.filter(tc => tc.teacher_id === teacherId);
+    });
+
+    const scheduledClassesByTeacher = computed(() => (teacherId) => {
+        return scheduledClasses.value.filter(sc => sc.teacher_id === teacherId);
+    });
+
+    const teacherUnavailabilityByTeacher = computed(() => (teacherId) => {
+        return teacherUnavailability.value.filter(tu => tu.teacher_id === teacherId);
+    });
+
+    const scheduleDensityByCampus = computed(() => (campusId) => {
+        return scheduleDensity.value.filter(sd => sd.campus_id === campusId);
+    });
 
     const revertChanges = async () => {
         console.log("Reverting changes...");
@@ -119,23 +167,71 @@ export const useDataStore = defineStore('data', () => {
     const courseOptions = computed(() => courses.value.map(c => ({ label: c.name, value: c.id })));
     const campusOptions = computed(() => campuses.value.map(c => ({ label: c.name, value: c.id })));
     const venueOptionsByCampus = computed(() => (campusId) => {
-        const campus = campuses.value.find(c => c.id === campusId);
-        return campus ? campus.venues.map(v => ({ label: v.name, value: v.id })) : [];
+        const campusVenues = venues.value.filter(v => v.campus_id === campusId);
+        return campusVenues.map(v => ({ label: v.name, value: v.id }));
     });
 
     const addTeacher = (teacherData) => {
         const { id, ...data } = teacherData;
-        const newTeacher = { ...data, id: uuidv4(), scheduled: teacherData.scheduled || [], unavailable: teacherData.unavailable || [] };
+        const newTeacher = { ...data, id: uuidv4() };
         teachers.value.push(newTeacher);
+
+        // Handle teaches relationship
+        if (teacherData.teaches && Array.isArray(teacherData.teaches)) {
+            teacherData.teaches.forEach(courseId => {
+                teacherCourses.value.push({ teacher_id: newTeacher.id, course_id: courseId });
+            });
+        }
+
+        // Handle unavailable slots
+        if (teacherData.unavailable && Array.isArray(teacherData.unavailable)) {
+            teacherData.unavailable.forEach(slot => {
+                teacherUnavailability.value.push({
+                    teacher_id: newTeacher.id,
+                    day_id: slot.day_id,
+                    time_id: slot.time_id
+                });
+            });
+        }
+
+        // Handle scheduled classes
+        if (teacherData.scheduled && Array.isArray(teacherData.scheduled)) {
+            teacherData.scheduled.forEach(schedule => {
+                scheduledClasses.value.push({
+                    ...schedule,
+                    id: schedule.id || uuidv4(),
+                    teacher_id: newTeacher.id
+                });
+            });
+        }
     };
     const updateTeacher = (updatedTeacher) => {
         const index = teachers.value.findIndex(t => t.id === updatedTeacher.id);
         if (index !== -1) {
-            teachers.value[index] = { ...teachers.value[index], ...updatedTeacher };
+            const { teaches, ...basicInfo } = updatedTeacher;
+            teachers.value[index] = { ...teachers.value[index], ...basicInfo };
+            teacherCourses.value = teacherCourses.value.filter(
+                tc => tc.teacher_id !== updatedTeacher.id
+            );
+            if (updatedTeacher.teaches && Array.isArray(updatedTeacher.teaches)) {
+                updatedTeacher.teaches.forEach(courseId => {
+                    teacherCourses.value.push({
+                        teacher_id: updatedTeacher.id,
+                        course_id: courseId
+                    });
+                });
+            }
+
+            console.log('教师关联课程已同步更新');
         }
     };
     const deleteTeacher = (teacherId) => {
         teachers.value = teachers.value.filter(t => t.id !== teacherId);
+        // Remove related data
+        teacherCourses.value = teacherCourses.value.filter(tc => tc.teacher_id !== teacherId);
+        teacherUnavailability.value = teacherUnavailability.value.filter(tu => tu.teacher_id !== teacherId);
+        scheduledClasses.value = scheduledClasses.value.filter(sc => sc.teacher_id !== teacherId);
+
         if (selectedTeacherIdForTeacherView.value === teacherId) {
             selectedTeacherIdForTeacherView.value = null;
         }
@@ -154,85 +250,93 @@ export const useDataStore = defineStore('data', () => {
 
     const addCourse = (courseData) => {
         const { id, ...data } = courseData;
-        const newCourse = { ...data, id: uuidv4(), place: courseData.place || [] };
+        const newCourse = { ...data, id: uuidv4() };
         courses.value.push(newCourse);
+
+        // Handle place (venue) relationships
+        if (courseData.place && Array.isArray(courseData.place)) {
+            courseData.place.forEach(place => {
+                courseVenues.value.push({
+                    course_id: newCourse.id,
+                    venue_id: place.venue_id
+                });
+            });
+        }
     };
-    
+
     const updateCourse = (updatedCourse) => {
         const index = courses.value.findIndex(c => c.id === updatedCourse.id);
         if (index !== -1) {
-            const originalCourse = JSON.parse(JSON.stringify(courses.value[index]));
+            const oldVenueIds = courseVenues.value
+                .filter(cv => cv.course_id === updatedCourse.id)
+                .map(cv => cv.venue_id);
+            if (updatedCourse.place?.length === 1 && oldVenueIds.length === 1) {
+                const newVenueId = updatedCourse.place[0].venue_id;
+                const oldVenueId = oldVenueIds[0];
 
-            const placeKey = p => `${p.campus_id}-${p.venue_id}`;
-
-            const originalPlaces = new Set(originalCourse.place.map(placeKey));
-            const updatedPlaces = new Set(updatedCourse.place.map(placeKey));
-
-            const removedPlacesRaw = originalCourse.place.filter(p => !updatedPlaces.has(placeKey(p)));
-            const addedPlacesRaw = updatedCourse.place.filter(p => !originalPlaces.has(placeKey(p)));
-
-            const campusToRemovedVenue = new Map();
-            removedPlacesRaw.forEach(p => {
-                if (!campusToRemovedVenue.has(p.campus_id)) {
-                    campusToRemovedVenue.set(p.campus_id, []);
-                }
-                campusToRemovedVenue.get(p.campus_id).push(p.venue_id);
-            });
-
-            const campusToAddedVenue = new Map();
-            addedPlacesRaw.forEach(p => {
-                if (!campusToAddedVenue.has(p.campus_id)) {
-                    campusToAddedVenue.set(p.campus_id, []);
-                }
-                campusToAddedVenue.get(p.campus_id).push(p.venue_id);
-            });
-
-            const replacements = [];
-            for (const [campusId, removedVenues] of campusToRemovedVenue.entries()) {
-                const addedVenues = campusToAddedVenue.get(campusId);
-                if (addedVenues && removedVenues.length === 1 && addedVenues.length === 1) {
-                    replacements.push({
-                        campusId: campusId,
-                        fromVenueId: removedVenues[0],
-                        toVenueId: addedVenues[0]
+                if (newVenueId !== oldVenueId) {
+                    scheduledClasses.value.forEach(sc => {
+                        if (sc.course_id === updatedCourse.id && sc.venue_id === oldVenueId) {
+                            sc.venue_id = newVenueId;
+                            // 同时更新校区 ID
+                            const v = venues.value.find(v => v.id === newVenueId);
+                            if (v) sc.campus_id = v.campus_id;
+                        }
                     });
                 }
             }
+            const { place, ...basicInfo } = updatedCourse;
+            courses.value[index] = { ...courses.value[index], ...basicInfo };
+            courseVenues.value = courseVenues.value.filter(cv => cv.course_id !== updatedCourse.id);
 
-            if (replacements.length > 0) {
-                teachers.value.forEach(teacher => {
-                    if (teacher.scheduled && teacher.scheduled.length > 0) {
-                        teacher.scheduled.forEach(schedule => {
-                            if (schedule.course_id === updatedCourse.id) {
-                                replacements.forEach(rep => {
-                                    if (schedule.campus_id === rep.campusId && schedule.venue_id === rep.fromVenueId) {
-                                        schedule.venue_id = rep.toVenueId;
-                                    }
-                                });
-                            }
+            if (updatedCourse.place && Array.isArray(updatedCourse.place)) {
+                updatedCourse.place.forEach(p => {
+                    if (p.venue_id) {
+                        courseVenues.value.push({
+                            course_id: updatedCourse.id,
+                            venue_id: p.venue_id
                         });
                     }
                 });
             }
-            
-            courses.value[index] = { ...courses.value[index], ...updatedCourse };
+            console.log('课程关联场地已同步更新');
         }
     };
 
     const deleteCourse = (courseId) => {
         courses.value = courses.value.filter(c => c.id !== courseId);
-        teachers.value.forEach(teacher => {
-            teacher.teaches = teacher.teaches.filter(teachCourseId => teachCourseId !== courseId);
-            if (teacher.scheduled) {
-                teacher.scheduled = teacher.scheduled.filter(s => s.course_id !== courseId);
-            }
-        });
+        courseVenues.value = courseVenues.value.filter(cv => cv.course_id !== courseId);
+        teacherCourses.value = teacherCourses.value.filter(tc => tc.course_id !== courseId);
+        scheduledClasses.value = scheduledClasses.value.filter(sc => sc.course_id !== courseId);
     };
 
     const addCampus = (campusData) => {
         const { id, ...data } = campusData;
-        const newCampus = { ...data, id: uuidv4(), venues: campusData.venues || [] };
+        const newCampus = { ...data, id: uuidv4() };
         campuses.value.push(newCampus);
+
+        // Handle venues
+        if (campusData.venues && Array.isArray(campusData.venues)) {
+            campusData.venues.forEach(venue => {
+                venues.value.push({
+                    ...venue,
+                    id: venue.id || uuidv4(),
+                    campus_id: newCampus.id
+                });
+            });
+        }
+
+        // Handle schedule_density
+        if (campusData.schedule_density && Array.isArray(campusData.schedule_density)) {
+            campusData.schedule_density.forEach(density => {
+                scheduleDensity.value.push({
+                    campus_id: newCampus.id,
+                    day_id: density.day_id,
+                    time_id: density.time_id,
+                    count: density.count
+                });
+            });
+        }
     };
     const updateCampus = (updatedCampus) => {
         const index = campuses.value.findIndex(c => c.id === updatedCampus.id);
@@ -242,86 +346,67 @@ export const useDataStore = defineStore('data', () => {
     };
     const deleteCampus = (campusId) => {
         campuses.value = campuses.value.filter(c => c.id !== campusId);
-        courses.value.forEach(course => {
-            course.place = course.place.filter(p => p.campus_id !== campusId);
-        });
+
+        // Get venue IDs for this campus
+        const venueIds = venues.value.filter(v => v.campus_id === campusId).map(v => v.id);
+
+        // Remove venues for this campus
+        venues.value = venues.value.filter(v => v.campus_id !== campusId);
+
+        // Remove course_venues for venues in this campus
+        courseVenues.value = courseVenues.value.filter(cv => !venueIds.includes(cv.venue_id));
+
+        // Remove scheduled classes for this campus
+        scheduledClasses.value = scheduledClasses.value.filter(sc => sc.campus_id !== campusId);
+
+        // Remove schedule density for this campus
+        scheduleDensity.value = scheduleDensity.value.filter(sd => sd.campus_id !== campusId);
+
         if (selectedCampusIdForCampusView.value === campusId) {
             selectedCampusIdForCampusView.value = null;
         }
-        teachers.value.forEach(teacher => {
-            if (teacher.scheduled) {
-                teacher.scheduled = teacher.scheduled.filter(s => s.campus_id !== campusId);
-            }
-        });
     };
 
     const addVenueToCampus = (campusId, venueData) => {
-        const campus = campuses.value.find(c => c.id === campusId);
-        if (campus) {
-            const { id, ...data } = venueData;
-            const newVenue = { ...data, id: uuidv4() };
-            if (!Array.isArray(campus.venues)) {
-                campus.venues = [];
-            }
-            campus.venues.push(newVenue);
-        }
+        const { id, ...data } = venueData;
+        const newVenue = { ...data, id: uuidv4(), campus_id: campusId };
+        venues.value.push(newVenue);
     };
+
     const updateVenueInCampus = (campusId, updatedVenue) => {
-        const campus = campuses.value.find(c => c.id === campusId);
-        if (campus && Array.isArray(campus.venues)) {
-            const venueIndex = campus.venues.findIndex(v => v.id === updatedVenue.id);
-            if (venueIndex !== -1) {
-                campus.venues[venueIndex] = { ...campus.venues[venueIndex], ...updatedVenue };
-            }
+        const venueIndex = venues.value.findIndex(v => v.id === updatedVenue.id && v.campus_id === campusId);
+        if (venueIndex !== -1) {
+            venues.value[venueIndex] = { ...venues.value[venueIndex], ...updatedVenue, campus_id: campusId };
         }
     };
+
     const deleteVenueFromCampus = (campusId, venueId) => {
-        const campus = campuses.value.find(c => c.id === campusId);
-        if (campus && Array.isArray(campus.venues)) {
-            campus.venues = campus.venues.filter(v => v.id !== venueId);
-            courses.value.forEach(course => {
-                course.place = course.place.filter(p => !(p.campus_id === campusId && p.venue_id === venueId));
-            });
-            teachers.value.forEach(teacher => {
-                if (teacher.scheduled) {
-                    teacher.scheduled = teacher.scheduled.filter(s => !(s.campus_id === campusId && s.venue_id === venueId));
-                }
-            });
-        }
+        venues.value = venues.value.filter(v => !(v.id === venueId && v.campus_id === campusId));
+        courseVenues.value = courseVenues.value.filter(cv => cv.venue_id !== venueId);
+        scheduledClasses.value = scheduledClasses.value.filter(sc => !(sc.campus_id === campusId && sc.venue_id === venueId));
     };
 
     const updateCampusScheduleDensity = (campusId, dayId, timeId, count) => {
-        const campus = campuses.value.find(c => c.id === campusId);
-        if (!campus) return;
-
-        if (!Array.isArray(campus.schedule_density)) {
-            campus.schedule_density = [];
-        }
-
-        const densityIndex = campus.schedule_density.findIndex(
-            d => d.day_id === dayId && d.time_id === timeId
+        const densityIndex = scheduleDensity.value.findIndex(
+            d => d.campus_id === campusId && d.day_id === dayId && d.time_id === timeId
         );
 
         const newCount = Math.max(0, count || 0);
 
         if (densityIndex !== -1) {
             if (newCount === 0) {
-                campus.schedule_density.splice(densityIndex, 1);
+                scheduleDensity.value.splice(densityIndex, 1);
             } else {
-                campus.schedule_density[densityIndex].count = newCount;
+                scheduleDensity.value[densityIndex].count = newCount;
             }
         } else if (newCount > 0) {
-            campus.schedule_density.push({ day_id: dayId, time_id: timeId, count: newCount });
+            scheduleDensity.value.push({ campus_id: campusId, day_id: dayId, time_id: timeId, count: newCount });
         }
     };
 
     const getExpectedCountForCampusCell = computed(() => (campusId, dayId, timeId) => {
-        const campus = campuses.value.find(c => c.id === campusId);
-        if (!campus || !campus.schedule_density) {
-            return 0;
-        }
-        const density = campus.schedule_density.find(
-            d => d.day_id === dayId && d.time_id === timeId
+        const density = scheduleDensity.value.find(
+            d => d.campus_id === campusId && d.day_id === dayId && d.time_id === timeId
         );
         return density ? density.count : 0;
     });
@@ -329,12 +414,9 @@ export const useDataStore = defineStore('data', () => {
     const teacherOptions = computed(() => teachers.value.map(t => ({ label: t.name, value: t.id })));
 
     const getScheduleMapForTeacher = computed(() => (teacherId) => {
-        const teacher = teachers.value.find(t => t.id === teacherId);
-        if (!teacher || !teacher.scheduled) {
-            return new Map();
-        }
+        const schedules = scheduledClasses.value.filter(sc => sc.teacher_id === teacherId);
         const scheduleMap = new Map();
-        teacher.scheduled.forEach(s => {
+        schedules.forEach(s => {
             const key = `${s.day_id}-${s.time_id}`;
             scheduleMap.set(key, s);
         });
@@ -342,12 +424,9 @@ export const useDataStore = defineStore('data', () => {
     });
 
     const getUnavailableMapForTeacher = computed(() => (teacherId) => {
-        const teacher = teachers.value.find(t => t.id === teacherId);
-        if (!teacher || !teacher.unavailable) {
-            return new Set();
-        }
+        const unavailableSlots = teacherUnavailability.value.filter(tu => tu.teacher_id === teacherId);
         const unavailableSet = new Set();
-        teacher.unavailable.forEach(slot => {
+        unavailableSlots.forEach(slot => {
             const key = `${slot.day_id}-${slot.time_id}`;
             unavailableSet.add(key);
         });
@@ -361,100 +440,78 @@ export const useDataStore = defineStore('data', () => {
         if (!campusId) return new Map();
 
         const scheduleMap = new Map();
-        teachers.value.forEach(teacher => {
-            if (teacher.scheduled) {
-                teacher.scheduled.forEach(schedule => {
-                    const campusMatch = schedule.campus_id === campusId;
-                    const venueMatch = !venueId || schedule.venue_id === venueId;
+        const filteredSchedules = scheduledClasses.value.filter(schedule => {
+            const campusMatch = schedule.campus_id === campusId;
+            const venueMatch = !venueId || schedule.venue_id === venueId;
+            return campusMatch && venueMatch;
+        });
 
-                    if (campusMatch && venueMatch) {
-                        const key = `${schedule.day_id}-${schedule.time_id}`;
-                        if (!scheduleMap.has(key)) {
-                            scheduleMap.set(key, []);
-                        }
-                        scheduleMap.get(key).push({ schedule, teacher });
-                    }
-                });
+        filteredSchedules.forEach(schedule => {
+            const teacher = teachers.value.find(t => t.id === schedule.teacher_id);
+            if (teacher) {
+                const key = `${schedule.day_id}-${schedule.time_id}`;
+                if (!scheduleMap.has(key)) {
+                    scheduleMap.set(key, []);
+                }
+                scheduleMap.get(key).push({ schedule, teacher });
             }
         });
+
         return scheduleMap;
     });
 
     const teacherCourseOptions = computed(() => (teacherId) => {
-        const teacher = teachers.value.find(t => t.id === teacherId);
-        if (!teacher) return [];
-        return teacher.teaches
-            .map(courseId => courses.value.find(c => c.id === courseId))
-            .filter(Boolean)
+        const teacherCourseRelations = teacherCourses.value.filter(tc => tc.teacher_id === teacherId);
+        const courseIds = teacherCourseRelations.map(tc => tc.course_id);
+        return courses.value
+            .filter(course => courseIds.includes(course.id))
             .map(course => ({ label: course.name, value: course.id }));
     });
 
     const courseCampusOptions = computed(() => (courseId) => {
-        const course = courses.value.find(c => c.id === courseId);
-        if (!course || !course.place) return [];
-        const campusIds = new Set(course.place.map(p => p.campus_id));
+        const courseVenueRelations = courseVenues.value.filter(cv => cv.course_id === courseId);
+        const venueIds = courseVenueRelations.map(cv => cv.venue_id);
+        const courseVenuesList = venues.value.filter(v => venueIds.includes(v.id));
+        const campusIds = new Set(courseVenuesList.map(v => v.campus_id));
         return campuses.value
             .filter(campus => campusIds.has(campus.id))
             .map(campus => ({ label: campus.name, value: campus.id }));
     });
 
     const courseVenueOptions = computed(() => (courseId, campusId) => {
-        const course = courses.value.find(c => c.id === courseId);
-        if (!course || !course.place) return [];
-        const venueIds = new Set(
-            course.place
-                .filter(p => p.campus_id === campusId)
-                .map(p => p.venue_id)
-        );
-        const campus = campuses.value.find(c => c.id === campusId);
-        if (!campus || !campus.venues) return [];
-        return campus.venues
+        const courseVenueRelations = courseVenues.value.filter(cv => cv.course_id === courseId);
+        const venueIds = new Set(courseVenueRelations.map(cv => cv.venue_id));
+        const campusVenues = venues.value.filter(v => v.campus_id === campusId);
+        return campusVenues
             .filter(venue => venueIds.has(venue.id))
             .map(venue => ({ label: venue.name, value: venue.id }));
     });
 
     const addSchedule = (teacherId, scheduleData) => {
-        const teacher = teachers.value.find(t => t.id === teacherId);
-        if (teacher) {
-            const newSchedule = { ...scheduleData, id: uuidv4() };
-            if (!Array.isArray(teacher.scheduled)) {
-                teacher.scheduled = [];
-            }
-            teacher.scheduled.push(newSchedule);
-        }
+        const newSchedule = { ...scheduleData, id: uuidv4(), teacher_id: teacherId };
+        scheduledClasses.value.push(newSchedule);
     };
 
     const updateSchedule = (teacherId, updatedSchedule) => {
-        const teacher = teachers.value.find(t => t.id === teacherId);
-        if (teacher && Array.isArray(teacher.scheduled)) {
-            const index = teacher.scheduled.findIndex(s => s.id === updatedSchedule.id);
-            if (index !== -1) {
-                teacher.scheduled[index] = { ...teacher.scheduled[index], ...updatedSchedule };
-            }
+        const index = scheduledClasses.value.findIndex(s => s.id === updatedSchedule.id && s.teacher_id === teacherId);
+        if (index !== -1) {
+            scheduledClasses.value[index] = { ...scheduledClasses.value[index], ...updatedSchedule, teacher_id: teacherId };
         }
     };
 
     const deleteSchedule = (teacherId, scheduleId) => {
-        const teacher = teachers.value.find(t => t.id === teacherId);
-        if (teacher && Array.isArray(teacher.scheduled)) {
-            teacher.scheduled = teacher.scheduled.filter(s => s.id !== scheduleId);
-        }
+        scheduledClasses.value = scheduledClasses.value.filter(s => !(s.id === scheduleId && s.teacher_id === teacherId));
     };
 
     const toggleUnavailableSlot = (teacherId, dayId, timeId) => {
-        const teacher = teachers.value.find(t => t.id === teacherId);
-        if (!teacher) return;
-        if (!Array.isArray(teacher.unavailable)) {
-            teacher.unavailable = [];
-        }
-
-        const key = `${dayId}-${timeId}`;
-        const index = teacher.unavailable.findIndex(s => s.day_id === dayId && s.time_id === timeId);
+        const index = teacherUnavailability.value.findIndex(
+            tu => tu.teacher_id === teacherId && tu.day_id === dayId && tu.time_id === timeId
+        );
 
         if (index !== -1) {
-            teacher.unavailable.splice(index, 1);
+            teacherUnavailability.value.splice(index, 1);
         } else {
-            teacher.unavailable.push({ day_id: dayId, time_id: timeId });
+            teacherUnavailability.value.push({ teacher_id: teacherId, day_id: dayId, time_id: timeId });
         }
     };
 
@@ -471,11 +528,9 @@ export const useDataStore = defineStore('data', () => {
     };
     const deleteTimeSlot = (timeSlotId) => {
         time.value = time.value.filter(t => t.id !== timeSlotId);
-        teachers.value.forEach(teacher => {
-            if (teacher.scheduled) {
-                teacher.scheduled = teacher.scheduled.filter(s => s.time_id !== timeSlotId);
-            }
-        });
+        scheduledClasses.value = scheduledClasses.value.filter(sc => sc.time_id !== timeSlotId);
+        teacherUnavailability.value = teacherUnavailability.value.filter(tu => tu.time_id !== timeSlotId);
+        scheduleDensity.value = scheduleDensity.value.filter(sd => sd.time_id !== timeSlotId);
     };
 
     const addDay = (dayData) => {
@@ -491,11 +546,9 @@ export const useDataStore = defineStore('data', () => {
     };
     const deleteDay = (dayId) => {
         day.value = day.value.filter(d => d.id !== dayId);
-        teachers.value.forEach(teacher => {
-            if (teacher.scheduled) {
-                teacher.scheduled = teacher.scheduled.filter(s => s.day_id !== dayId);
-            }
-        });
+        scheduledClasses.value = scheduledClasses.value.filter(sc => sc.day_id !== dayId);
+        teacherUnavailability.value = teacherUnavailability.value.filter(tu => tu.day_id !== dayId);
+        scheduleDensity.value = scheduleDensity.value.filter(sd => sd.day_id !== dayId);
     };
 
     return {
@@ -504,8 +557,14 @@ export const useDataStore = defineStore('data', () => {
         teachers,
         courses,
         campuses,
+        venues,
         time,
         day,
+        courseVenues,
+        teacherCourses,
+        scheduledClasses,
+        teacherUnavailability,
+        scheduleDensity,
         initializeData,
         replaceAllData,
         revertChanges,
@@ -521,6 +580,12 @@ export const useDataStore = defineStore('data', () => {
         courseOptions,
         campusOptions,
         venueOptionsByCampus,
+        venuesByCampus,
+        courseVenuesByCourse,
+        teacherCoursesByTeacher,
+        scheduledClassesByTeacher,
+        teacherUnavailabilityByTeacher,
+        scheduleDensityByCampus,
 
         addTeacher,
         updateTeacher,

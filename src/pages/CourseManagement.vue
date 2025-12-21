@@ -62,10 +62,13 @@ const createColumns = ({ onEdit, onDelete }) => [
         title: '上课地点',
         key: 'place',
         render: (row) => {
-            if (!row.place || row.place.length === 0) return '未指定';
-            return row.place.map(p => {
-                const campus = dataStore.campuses.find(c => c.id === p.campus_id);
-                const venue = campus?.venues.find(v => v.id === p.venue_id);
+            const relations = dataStore.courseVenuesByCourse(row.id);
+
+            if (!relations || relations.length === 0) return '未指定';
+
+            return relations.map(rel => {
+                const venue = dataStore.venues.find(v => v.id === rel.venue_id);
+                const campus = dataStore.campuses.find(c => c.id === venue?.campus_id);
                 return `${campus?.name || '未知校区'} - ${venue?.name || '未知场地'}`;
             }).join('; ');
         },
@@ -89,7 +92,16 @@ const createColumns = ({ onEdit, onDelete }) => [
 const columns = createColumns({
     onEdit: (course) => {
         isEditMode.value = true;
-        currentCourse.value = JSON.parse(JSON.stringify(course));
+        const courseData = JSON.parse(JSON.stringify(course));
+        courseData.place = dataStore.courseVenuesByCourse(course.id).map(rel => {
+            const venue = dataStore.venues.find(v => v.id === rel.venue_id);
+            return {
+                campus_id: venue?.campus_id || null,
+                venue_id: rel.venue_id
+            };
+        });
+
+        currentCourse.value = courseData;
         if (currentCourse.value.place) {
             venueOptionsForPlace.value = currentCourse.value.place.map(pItem =>
                 pItem.campus_id ? dataStore.venueOptionsByCampus(pItem.campus_id) : []
@@ -193,8 +205,8 @@ const handleSubmit = () => {
 
         <n-layout-content content-style="padding: 24px;" style="height: calc(100vh - 156px); overflow: auto;"
             :native-scrollbar="false">
-            <n-data-table :columns="columns" :single-line="false" :data="dataStore.courses" :pagination="pagination" :bordered="true"
-                style="width: 100%;" />
+            <n-data-table :columns="columns" :single-line="false" :data="dataStore.courses" :pagination="pagination"
+                :bordered="true" style="width: 100%;" />
             <n-modal v-model:show="showModal" preset="dialog" :title="modalTitle" style="width: 700px;">
                 <n-form ref="formRef" :model="currentCourse" :rules="rules" label-placement="left" label-width="auto"
                     require-mark-placement="right-hanging">

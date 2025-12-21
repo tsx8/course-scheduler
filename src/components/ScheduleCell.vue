@@ -100,8 +100,8 @@ const campusName = computed(() => {
     return campus?.name || '未知校区';
 });
 const venueName = computed(() => {
-    const campus = dataStore.campuses.find(c => c.id === scheduleForCell.value?.campus_id);
-    const venue = campus?.venues.find(v => v.id === scheduleForCell.value?.venue_id);
+    if (!scheduleForCell.value) return '未知场地';
+    const venue = dataStore.venues.find(v => v.id === scheduleForCell.value.venue_id);
     return venue?.name || '未知场地';
 });
 

@@ -9,7 +9,7 @@
 - 👨‍🏫 **教师管理**: 灵活的教师课程分配和时间约束设置
 - 📅 **可视化时间表**: 直观的教师和校区课表展示
 - 💾 **临时保存机制**: 双表 SQLite 架构实现乐观临时-提交模式
-- 🗄️ **SQLite 数据库**: 嵌入式数据库,零配置,ACID 事务保证
+- 🗄️ **规范化数据库**: 符合第三范式的数据库设计，消除数据冗余
 - 📤 **导入导出**: 支持 JSON 和 SQLite 数据库文件的导入导出
 - 📝 **日志系统**: 自动记录应用运行日志,支持日期轮转和自动清理
 - 🚀 **原生性能**: 基于 Tauri 2 框架,体积小、速度快、资源占用低
@@ -200,6 +200,132 @@ course-scheduler/
 **备份建议**: 定期复制 `course_scheduler.db` 文件到安全位置
 
 **智能数据同步**: 当课程的场地发生变化时，`data.js` 中的 Pinia store 会自动更新所有相关教师的已排课程（智能替换逻辑，防止孤立引用）。
+
+## 🏛️ 数据库设计：第三范式 (3NF)
+
+### 设计原则
+
+本项目严格遵循第三范式 (3NF) 数据库设计规范，确保数据一致性和系统可维护性。
+
+**3NF 核心要求**:
+1. ✅ 所有属性都是原子性的（不可再分）
+2. ✅ 所有非主键属性完全依赖于主键
+3. ✅ 所有非主键属性之间不存在传递依赖
+
+### 规范化实践
+
+#### 1. **消除数据冗余**
+
+**course_venues 关系表**（课程-场地多对多关系）:
+```sql
+-- 只存储关系本身，不冗余存储 campus_id
+CREATE TABLE course_venues (
+    course_id TEXT NOT NULL,
+    venue_id TEXT NOT NULL,
+    PRIMARY KEY (course_id, venue_id),
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+    FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
+);
+```
+
+**设计优势**:
+- ✅ campus_id 只在 venues 表存储一次（单一数据源）
+- ✅ 修改 venue 所属校区只需更新一处
+- ✅ 不存在数据不一致的可能性
+
+#### 2. **扁平化数据模型**
+
+前端数据模型与数据库结构保持一致，采用扁平化关系存储:
+
+```javascript
+// 扁平化存储
+const campuses = ref([
+  { id: 'campus-1', name: '沙河校区' }
+]);
+
+const venues = ref([
+  { id: 'v1', campus_id: 'campus-1', name: '教室101', capacity: 30 }
+]);
+
+// 通过计算属性获取关联数据
+const getCampusVenues = (campusId) => {
+  return venues.value.filter(v => v.campus_id === campusId);
+};
+```
+
+**优势**:
+- ✅ 数据更新简单（不需要维护嵌套结构）
+- ✅ 内存占用更低（无重复对象）
+- ✅ 序列化/反序列化效率高
+
+#### 3. **外键约束与级联删除**
+
+启用严格的数据库约束，确保引用完整性:
+
+```sql
+PRAGMA foreign_keys = ON;
+
+-- 级联删除示例
+CREATE TABLE course_venues (
+    course_id TEXT NOT NULL,
+    venue_id TEXT NOT NULL,
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+    FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
+);
+```
+
+**自动维护关系**:
+- ✅ 删除 campus → 自动删除关联的 venues 和 course_venues
+- ✅ 删除 teacher → 自动删除 teacher_courses 和 scheduled_classes
+- ✅ 删除 course → 自动删除 course_venues 和 scheduled_classes
+- ✅ 事务保证操作原子性（全部成功或全部回滚）
+
+#### 4. **索引优化**
+
+为关联查询创建索引，提升查询性能:
+
+```sql
+CREATE INDEX idx_course_venues_course ON course_venues(course_id);
+CREATE INDEX idx_course_venues_venue ON course_venues(venue_id);
+CREATE INDEX idx_venues_campus ON venues(campus_id);
+CREATE INDEX idx_teacher_courses_teacher ON teacher_courses(teacher_id);
+CREATE INDEX idx_teacher_courses_course ON teacher_courses(course_id);
+```
+
+### 开发规范
+
+**修改数据库时必须保持 3NF 合规性**:
+
+❌ **错误示例**（违反 3NF）:
+```sql
+-- 在 scheduled_classes 中冗余存储 teacher_name
+CREATE TABLE scheduled_classes (
+    teacher_id TEXT,
+    teacher_name TEXT,  -- 违反 3NF！
+    ...
+);
+```
+
+✅ **正确示例**（符合 3NF）:
+```sql
+-- 只存储外键，通过 JOIN 获取属性
+CREATE TABLE scheduled_classes (
+    teacher_id TEXT,
+    FOREIGN KEY (teacher_id) REFERENCES teachers(id)
+);
+
+-- 查询时关联获取
+SELECT sc.*, t.name as teacher_name
+FROM scheduled_classes sc
+JOIN teachers t ON sc.teacher_id = t.id;
+```
+
+**数据建模检查清单**:
+1. ❌ 不要在多个表中存储相同的非键属性
+2. ❌ 不要创建传递依赖（A → B → C，其中 C 依赖于 B 而非 A）
+3. ✅ 确保每个非键属性直接依赖于主键
+4. ✅ 使用外键约束强制引用完整性
+5. ✅ 为高频关联查询创建索引
 
 ### 导入导出功能
 

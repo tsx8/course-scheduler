@@ -40,11 +40,9 @@ CREATE TABLE IF NOT EXISTS courses (
 
 CREATE TABLE IF NOT EXISTS course_venues (
     course_id TEXT NOT NULL,
-    campus_id TEXT NOT NULL,
     venue_id TEXT NOT NULL,
-    PRIMARY KEY (course_id, campus_id, venue_id),
+    PRIMARY KEY (course_id, venue_id),
     FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
-    FOREIGN KEY (campus_id) REFERENCES campuses(id) ON DELETE CASCADE,
     FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
 );
 
@@ -135,11 +133,9 @@ CREATE TABLE IF NOT EXISTS courses_temp (
 
 CREATE TABLE IF NOT EXISTS course_venues_temp (
     course_id TEXT NOT NULL,
-    campus_id TEXT NOT NULL,
     venue_id TEXT NOT NULL,
-    PRIMARY KEY (course_id, campus_id, venue_id),
+    PRIMARY KEY (course_id, venue_id),
     FOREIGN KEY (course_id) REFERENCES courses_temp(id) ON DELETE CASCADE,
-    FOREIGN KEY (campus_id) REFERENCES campuses_temp(id) ON DELETE CASCADE,
     FOREIGN KEY (venue_id) REFERENCES venues_temp(id) ON DELETE CASCADE
 );
 
@@ -194,3 +190,31 @@ CREATE TABLE IF NOT EXISTS schedule_density_temp (
     FOREIGN KEY (day_id) REFERENCES days_temp(id) ON DELETE CASCADE,
     FOREIGN KEY (time_id) REFERENCES time_slots_temp(id) ON DELETE CASCADE
 );
+
+-- ============================================================================
+-- PERFORMANCE INDEXES
+-- ============================================================================
+
+-- Main table indexes
+CREATE INDEX IF NOT EXISTS idx_venues_campus_id ON venues(campus_id);
+CREATE INDEX IF NOT EXISTS idx_course_venues_course_id ON course_venues(course_id);
+CREATE INDEX IF NOT EXISTS idx_course_venues_venue_id ON course_venues(venue_id);
+CREATE INDEX IF NOT EXISTS idx_teacher_courses_teacher_id ON teacher_courses(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_teacher_courses_course_id ON teacher_courses(course_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_classes_teacher_id ON scheduled_classes(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_classes_course_id ON scheduled_classes(course_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_classes_venue_id ON scheduled_classes(venue_id);
+CREATE INDEX IF NOT EXISTS idx_teacher_unavailability_teacher_id ON teacher_unavailability(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_schedule_density_campus_id ON schedule_density(campus_id);
+
+-- Temp table indexes
+CREATE INDEX IF NOT EXISTS idx_venues_temp_campus_id ON venues_temp(campus_id);
+CREATE INDEX IF NOT EXISTS idx_course_venues_temp_course_id ON course_venues_temp(course_id);
+CREATE INDEX IF NOT EXISTS idx_course_venues_temp_venue_id ON course_venues_temp(venue_id);
+CREATE INDEX IF NOT EXISTS idx_teacher_courses_temp_teacher_id ON teacher_courses_temp(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_teacher_courses_temp_course_id ON teacher_courses_temp(course_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_classes_temp_teacher_id ON scheduled_classes_temp(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_classes_temp_course_id ON scheduled_classes_temp(course_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_classes_temp_venue_id ON scheduled_classes_temp(venue_id);
+CREATE INDEX IF NOT EXISTS idx_teacher_unavailability_temp_teacher_id ON teacher_unavailability_temp(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_schedule_density_temp_campus_id ON schedule_density_temp(campus_id);

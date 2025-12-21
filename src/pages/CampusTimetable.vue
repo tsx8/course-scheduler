@@ -62,13 +62,14 @@ const columns = computed(() => {
         }),
         render(row) {
             const schedulesInCell = row[day.id];
-            
+
             if (selectedVenueId.value) {
-                 const scheduleNodes = schedulesInCell.map(({ schedule, teacher }) => {
+                const scheduleNodes = schedulesInCell.map(({ schedule, teacher }) => {
                     const course = dataStore.courses.find(c => c.id === schedule.course_id);
+                    const venue = dataStore.venues.find(v => v.id === schedule.venue_id);
                     return h('div', { style: 'text-align: left; padding: 4px; border-radius: 4px; background-color: #e6f7ff; border: 1px solid #91d5ff; margin-top: 4px;' }, [
                         h('div', { style: 'font-weight: bold;' }, `${course?.name || '未知'}`),
-                        h('div', `${teacher?.name || '未知教师'}`)
+                        h('div', `${teacher?.name || '未知'} - ${venue?.name || '未知'}`)
                     ]);
                 });
                 return h('div', null, scheduleNodes);
@@ -81,7 +82,7 @@ const columns = computed(() => {
             const expectedCount = dataStore.getExpectedCountForCampusCell(selectedCampusId.value, dayId, timeId);
             const isOverbooked = actualCount > expectedCount && expectedCount > 0;
 
-            const counterNode = h(NFlex, { align: 'center', style: 'margin-bottom: 8px;'}, {
+            const counterNode = h(NFlex, { align: 'center', style: 'margin-bottom: 8px;' }, {
                 default: () => [
                     h(NText, { depth: 3, style: 'font-size: 12px;' }, { default: () => '期望:' }),
                     h(NInputNumber, {
@@ -106,8 +107,7 @@ const columns = computed(() => {
 
             const scheduleNodes = schedulesInCell.map(({ schedule, teacher }) => {
                 const course = dataStore.courses.find(c => c.id === schedule.course_id);
-                const venue = dataStore.campuses.find(c => c.id === schedule.campus_id)
-                    ?.venues.find(v => v.id === schedule.venue_id);
+                const venue = dataStore.venues.find(v => v.id === schedule.venue_id);
                 return h('div', { style: 'text-align: left; padding: 4px; border-radius: 4px; background-color: #e6f7ff; border: 1px solid #91d5ff; margin-top: 4px;' }, [
                     h('div', { style: 'font-weight: bold;' }, `${course?.name || '未知'}`),
                     h('div', `${teacher?.name || '未知'} - ${venue?.name || '未知'}`)
@@ -153,16 +153,15 @@ const handleExportToCsv = () => {
             } else {
                 const cellContent = schedules.map(({ schedule, teacher }) => {
                     const course = dataStore.courses.find(c => c.id === schedule.course_id);
-                    const venue = dataStore.campuses.find(c => c.id === schedule.campus_id)
-                        ?.venues.find(v => v.id === schedule.venue_id);
-                    
+                    const venue = dataStore.venues.find(v => v.id === schedule.venue_id);
+
                     const courseName = course?.name || '未知课程';
                     const teacherName = teacher?.name || '未知教师';
                     const venueName = venue?.name || '未知场地';
-                    
+
                     return `${courseName} (${teacherName} - ${venueName})`;
                 }).join('\n');
-                
+
                 rowData.push(`"${cellContent.replace(/"/g, '""')}"`);
             }
         });
@@ -170,9 +169,9 @@ const handleExportToCsv = () => {
     });
 
     const csvContent = [headers.join(','), ...rows].join('\n');
-    
+
     const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    
+
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
@@ -187,7 +186,7 @@ const handleExportToCsv = () => {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    
+
     message.success('CSV文件已开始下载');
 };
 
@@ -207,9 +206,9 @@ watch(() => dataStore.campuses, (newCampuses) => {
                 <n-h2 style="margin: 0;">校区总课表</n-h2>
                 <n-flex align="center">
                     <n-select v-model:value="selectedCampusId" placeholder="请选择校区" :options="campusOptions" clearable
-                    style="width: 150px" />
+                        style="width: 150px" />
                     <n-select v-model:value="selectedVenueId" placeholder="选择场地" :options="venueOptions" clearable
-                    :disabled="!selectedCampusId" style="width: 150px" />
+                        :disabled="!selectedCampusId" style="width: 150px" />
                     <n-button type="primary" @click="handleExportToCsv" :disabled="!selectedCampusId">
                         <template #icon><n-icon :component="ExportIcon" /></template>
                         导出CSV

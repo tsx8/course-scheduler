@@ -95,7 +95,7 @@ const campusColumns = [
         renderExpand: (campusRowData) => {
             return h(NDataTable, {
                 columns: createVenueColumns(campusRowData.id),
-                data: campusRowData.venues,
+                data: dataStore.venuesByCampus(campusRowData.id),
                 singleLine: false,
                 size: 'small',
                 pagination: { pageSize: 5 },

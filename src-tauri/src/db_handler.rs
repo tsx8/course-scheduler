@@ -3,6 +3,7 @@
 // Replaces file_handler.rs with database operations
 
 use crate::models::*;
+use crate::import_export::process_json_format;
 use rusqlite::{params, Connection, Result as SqlResult, Transaction};
 use std::path::Path;
 use std::sync::Mutex;
@@ -83,24 +84,29 @@ pub fn migrate_from_json(conn: &Connection, app_data_dir: &Path) -> CommandResul
     
     info!("Starting migration from: {}", json_path.display());
     
-    // Read and parse JSON file
     let json_content = std::fs::read_to_string(&json_path)
         .map_err(|e| {
             error!("Failed to read data.json: {}", e);
             format!("Failed to read data.json: {}", e)
         })?;
     
-    let all_data: AllData = serde_json::from_str(&json_content)
+    let json_value: serde_json::Value = serde_json::from_str(&json_content)
         .map_err(|e| {
-            error!("Invalid JSON format in data.json: {}", e);
-            format!("Invalid JSON format in data.json: {}", e)
+            error!("Invalid raw JSON format: {}", e);
+            format!("Invalid raw JSON format: {}", e)
+        })?;
+
+    let normalized_json = process_json_format(json_value);
+
+    let all_data: AllData = serde_json::from_value(normalized_json)
+        .map_err(|e| {
+            error!("Failed to map normalized JSON to model: {}", e);
+            format!("Failed to map normalized JSON to model: {}", e)
         })?;
     
     let teacher_count = all_data.teachers.len();
     let course_count = all_data.courses.len();
-    let schedule_count = all_data.teachers.iter()
-        .map(|t| t.scheduled.len())
-        .sum::<usize>();
+    let schedule_count = all_data.scheduled_classes.len();
     
     info!("Parsed JSON: {} teachers, {} courses, {} campuses, {} schedules",
           teacher_count, course_count, all_data.campuses.len(), schedule_count);
@@ -344,8 +350,14 @@ pub fn load_all_data_from_connection(conn: &Connection, use_temp: bool) -> Comma
         time: load_time_slots(conn, use_temp)?,
         day: load_days(conn, use_temp)?,
         campuses: load_campuses(conn, use_temp)?,
+        venues: load_venues(conn, use_temp)?,
         courses: load_courses(conn, use_temp)?,
         teachers: load_teachers(conn, use_temp)?,
+        course_venues: load_course_venues(conn, use_temp)?,
+        teacher_courses: load_teacher_courses(conn, use_temp)?,
+        scheduled_classes: load_scheduled_classes(conn, use_temp)?,
+        teacher_unavailability: load_teacher_unavailability(conn, use_temp)?,
+        schedule_density: load_schedule_density(conn, use_temp)?,
     })
 }
 
@@ -362,13 +374,7 @@ fn load_all_data(conn: &Connection) -> CommandResult<AllData> {
     
     let use_temp = has_temp_data;
     
-    Ok(AllData {
-        time: load_time_slots(conn, use_temp)?,
-        day: load_days(conn, use_temp)?,
-        campuses: load_campuses(conn, use_temp)?,
-        courses: load_courses(conn, use_temp)?,
-        teachers: load_teachers(conn, use_temp)?,
-    })
+    load_all_data_from_connection(conn, use_temp)
 }
 
 fn load_time_slots(conn: &Connection, use_temp: bool) -> CommandResult<Vec<TimeSlot>> {
@@ -415,234 +421,210 @@ fn load_days(conn: &Connection, use_temp: bool) -> CommandResult<Vec<Day>> {
 }
 
 fn load_campuses(conn: &Connection, use_temp: bool) -> CommandResult<Vec<Campus>> {
-    let campus_table = if use_temp { "campuses_temp" } else { "campuses" };
-    let venue_table = if use_temp { "venues_temp" } else { "venues" };
-    let density_table = if use_temp { "schedule_density_temp" } else { "schedule_density" };
+    let table = if use_temp { "campuses_temp" } else { "campuses" };
+    let query = format!("SELECT id, name FROM {}", table);
     
-    let query = format!("SELECT id, name FROM {}", campus_table);
     let mut stmt = conn
         .prepare(&query)
         .map_err(|e| format!("Failed to prepare campuses query: {}", e))?;
     
-    let campus_rows: Vec<(String, String)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+    let campuses: SqlResult<Vec<Campus>> = stmt
+        .query_map([], |row| {
+            Ok(Campus {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })
         .map_err(|e| format!("Failed to query campuses: {}", e))?
-        .collect::<SqlResult<_>>()
-        .map_err(|e| format!("Failed to load campuses: {}", e))?;
+        .collect();
     
-    let mut campuses = Vec::new();
+    campuses.map_err(|e| format!("Failed to load campuses: {}", e))
+}
+
+fn load_venues(conn: &Connection, use_temp: bool) -> CommandResult<Vec<Venue>> {
+    let table = if use_temp { "venues_temp" } else { "venues" };
+    let query = format!("SELECT id, campus_id, name, capacity FROM {}", table);
     
-    for (campus_id, campus_name) in campus_rows {
-        // Load venues for this campus
-        let venue_query = format!(
-            "SELECT id, name, capacity FROM {} WHERE campus_id = ?",
-            venue_table
-        );
-        let mut venue_stmt = conn
-            .prepare(&venue_query)
-            .map_err(|e| format!("Failed to prepare venues query: {}", e))?;
-        
-        let venues: Vec<Venue> = venue_stmt
-            .query_map([&campus_id], |row| {
-                Ok(Venue {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    capacity: row.get(2)?,
-                })
+    let mut stmt = conn
+        .prepare(&query)
+        .map_err(|e| format!("Failed to prepare venues query: {}", e))?;
+    
+    let venues: SqlResult<Vec<Venue>> = stmt
+        .query_map([], |row| {
+            Ok(Venue {
+                id: row.get(0)?,
+                campus_id: row.get(1)?,
+                name: row.get(2)?,
+                capacity: row.get(3)?,
             })
-            .map_err(|e| format!("Failed to query venues: {}", e))?
-            .collect::<SqlResult<_>>()
-            .map_err(|e| format!("Failed to load venues: {}", e))?;
-        
-        // Load schedule density for this campus
-        let density_query = format!(
-            "SELECT day_id, time_id, count FROM {} WHERE campus_id = ?",
-            density_table
-        );
-        let mut density_stmt = conn
-            .prepare(&density_query)
-            .map_err(|e| format!("Failed to prepare density query: {}", e))?;
-        
-        let schedule_density: Vec<ScheduleDensity> = density_stmt
-            .query_map([&campus_id], |row| {
-                Ok(ScheduleDensity {
-                    day_id: row.get(0)?,
-                    time_id: row.get(1)?,
-                    count: row.get(2)?,
-                })
-            })
-            .map_err(|e| format!("Failed to query schedule_density: {}", e))?
-            .collect::<SqlResult<_>>()
-            .map_err(|e| format!("Failed to load schedule_density: {}", e))?;
-        
-        campuses.push(Campus {
-            id: campus_id,
-            name: campus_name,
-            venues,
-            schedule_density,
-        });
-    }
+        })
+        .map_err(|e| format!("Failed to query venues: {}", e))?
+        .collect();
     
-    Ok(campuses)
+    venues.map_err(|e| format!("Failed to load venues: {}", e))
 }
 
 fn load_courses(conn: &Connection, use_temp: bool) -> CommandResult<Vec<Course>> {
-    let course_table = if use_temp { "courses_temp" } else { "courses" };
-    let place_table = if use_temp { "course_venues_temp" } else { "course_venues" };
+    let table = if use_temp { "courses_temp" } else { "courses" };
+    let query = format!("SELECT id, name FROM {}", table);
     
-    let query = format!("SELECT id, name FROM {}", course_table);
     let mut stmt = conn
         .prepare(&query)
         .map_err(|e| format!("Failed to prepare courses query: {}", e))?;
     
-    let course_rows: Vec<(String, String)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .map_err(|e| format!("Failed to query courses: {}", e))?
-        .collect::<SqlResult<_>>()
-        .map_err(|e| format!("Failed to load courses: {}", e))?;
-    
-    let mut courses = Vec::new();
-    
-    for (course_id, course_name) in course_rows {
-        // Load places (venues) for this course
-        let place_query = format!(
-            "SELECT campus_id, venue_id FROM {} WHERE course_id = ?",
-            place_table
-        );
-        let mut place_stmt = conn
-            .prepare(&place_query)
-            .map_err(|e| format!("Failed to prepare course places query: {}", e))?;
-        
-        let place: Vec<CoursePlace> = place_stmt
-            .query_map([&course_id], |row| {
-                Ok(CoursePlace {
-                    campus_id: row.get(0)?,
-                    venue_id: row.get(1)?,
-                })
+    let courses: SqlResult<Vec<Course>> = stmt
+        .query_map([], |row| {
+            Ok(Course {
+                id: row.get(0)?,
+                name: row.get(1)?,
             })
-            .map_err(|e| format!("Failed to query course places: {}", e))?
-            .collect::<SqlResult<_>>()
-            .map_err(|e| format!("Failed to load course places: {}", e))?;
-        
-        courses.push(Course {
-            id: course_id,
-            name: course_name,
-            place,
-        });
-    }
+        })
+        .map_err(|e| format!("Failed to query courses: {}", e))?
+        .collect();
     
-    Ok(courses)
+    courses.map_err(|e| format!("Failed to load courses: {}", e))
+}
+
+fn load_course_venues(conn: &Connection, use_temp: bool) -> CommandResult<Vec<CourseVenue>> {
+    let table = if use_temp { "course_venues_temp" } else { "course_venues" };
+    let query = format!("SELECT course_id, venue_id FROM {}", table);
+    
+    let mut stmt = conn
+        .prepare(&query)
+        .map_err(|e| format!("Failed to prepare course_venues query: {}", e))?;
+    
+    let course_venues: SqlResult<Vec<CourseVenue>> = stmt
+        .query_map([], |row| {
+            Ok(CourseVenue {
+                course_id: row.get(0)?,
+                venue_id: row.get(1)?,
+            })
+        })
+        .map_err(|e| format!("Failed to query course_venues: {}", e))?
+        .collect();
+    
+    course_venues.map_err(|e| format!("Failed to load course_venues: {}", e))
 }
 
 fn load_teachers(conn: &Connection, use_temp: bool) -> CommandResult<Vec<Teacher>> {
-    let teacher_table = if use_temp { "teachers_temp" } else { "teachers" };
-    let teaches_table = if use_temp { "teacher_courses_temp" } else { "teacher_courses" };
-    let unavail_table = if use_temp {
-        "teacher_unavailability_temp"
-    } else {
-        "teacher_unavailability"
-    };
-    let scheduled_table = if use_temp {
-        "scheduled_classes_temp"
-    } else {
-        "scheduled_classes"
-    };
-    
+    let table = if use_temp { "teachers_temp" } else { "teachers" };
     let query = format!(
         "SELECT id, name, max_teaching_hours, is_only_shahe FROM {}",
-        teacher_table
+        table
     );
+    
     let mut stmt = conn
         .prepare(&query)
         .map_err(|e| format!("Failed to prepare teachers query: {}", e))?;
     
-    let teacher_rows: Vec<(String, String, u8, bool)> = stmt
+    let teachers: SqlResult<Vec<Teacher>> = stmt
         .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get::<_, i32>(3)? != 0,
-            ))
+            Ok(Teacher {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                max_teaching_hours: row.get(2)?,
+                is_only_shahe: row.get::<_, i32>(3)? != 0,
+            })
         })
         .map_err(|e| format!("Failed to query teachers: {}", e))?
-        .collect::<SqlResult<_>>()
-        .map_err(|e| format!("Failed to load teachers: {}", e))?;
+        .collect();
     
-    let mut teachers = Vec::new();
+    teachers.map_err(|e| format!("Failed to load teachers: {}", e))
+}
+
+fn load_teacher_courses(conn: &Connection, use_temp: bool) -> CommandResult<Vec<TeacherCourse>> {
+    let table = if use_temp { "teacher_courses_temp" } else { "teacher_courses" };
+    let query = format!("SELECT teacher_id, course_id FROM {}", table);
     
-    for (teacher_id, teacher_name, max_hours, is_only_shahe) in teacher_rows {
-        // Load courses this teacher teaches
-        let teaches_query = format!(
-            "SELECT course_id FROM {} WHERE teacher_id = ?",
-            teaches_table
-        );
-        let mut teaches_stmt = conn
-            .prepare(&teaches_query)
-            .map_err(|e| format!("Failed to prepare teacher_courses query: {}", e))?;
-        
-        let teaches: Vec<String> = teaches_stmt
-            .query_map([&teacher_id], |row| row.get(0))
-            .map_err(|e| format!("Failed to query teacher courses: {}", e))?
-            .collect::<SqlResult<_>>()
-            .map_err(|e| format!("Failed to load teacher courses: {}", e))?;
-        
-        // Load unavailable slots
-        let unavail_query = format!(
-            "SELECT day_id, time_id FROM {} WHERE teacher_id = ?",
-            unavail_table
-        );
-        let mut unavail_stmt = conn
-            .prepare(&unavail_query)
-            .map_err(|e| format!("Failed to prepare unavailability query: {}", e))?;
-        
-        let unavailable: Vec<BlockedSlot> = unavail_stmt
-            .query_map([&teacher_id], |row| {
-                Ok(BlockedSlot {
-                    day_id: row.get(0)?,
-                    time_id: row.get(1)?,
-                })
+    let mut stmt = conn
+        .prepare(&query)
+        .map_err(|e| format!("Failed to prepare teacher_courses query: {}", e))?;
+    
+    let teacher_courses: SqlResult<Vec<TeacherCourse>> = stmt
+        .query_map([], |row| {
+            Ok(TeacherCourse {
+                teacher_id: row.get(0)?,
+                course_id: row.get(1)?,
             })
-            .map_err(|e| format!("Failed to query unavailability: {}", e))?
-            .collect::<SqlResult<_>>()
-            .map_err(|e| format!("Failed to load unavailability: {}", e))?;
-        
-        // Load scheduled classes
-        let scheduled_query = format!(
-            "SELECT id, day_id, time_id, course_id, campus_id, venue_id FROM {} WHERE teacher_id = ?",
-            scheduled_table
-        );
-        let mut scheduled_stmt = conn
-            .prepare(&scheduled_query)
-            .map_err(|e| format!("Failed to prepare scheduled classes query: {}", e))?;
-        
-        let scheduled: Vec<ScheduledClass> = scheduled_stmt
-            .query_map([&teacher_id], |row| {
-                Ok(ScheduledClass {
-                    id: row.get(0)?,
-                    day_id: row.get(1)?,
-                    time_id: row.get(2)?,
-                    course_id: row.get(3)?,
-                    campus_id: row.get(4)?,
-                    venue_id: row.get(5)?,
-                })
-            })
-            .map_err(|e| format!("Failed to query scheduled classes: {}", e))?
-            .collect::<SqlResult<_>>()
-            .map_err(|e| format!("Failed to load scheduled classes: {}", e))?;
-        
-        teachers.push(Teacher {
-            id: teacher_id,
-            name: teacher_name,
-            max_teaching_hours: max_hours,
-            is_only_shahe,
-            unavailable,
-            teaches,
-            scheduled,
-        });
-    }
+        })
+        .map_err(|e| format!("Failed to query teacher_courses: {}", e))?
+        .collect();
     
-    Ok(teachers)
+    teacher_courses.map_err(|e| format!("Failed to load teacher_courses: {}", e))
+}
+
+fn load_scheduled_classes(conn: &Connection, use_temp: bool) -> CommandResult<Vec<ScheduledClass>> {
+    let table = if use_temp { "scheduled_classes_temp" } else { "scheduled_classes" };
+    let query = format!(
+        "SELECT id, teacher_id, course_id, day_id, time_id, campus_id, venue_id FROM {}",
+        table
+    );
+    
+    let mut stmt = conn
+        .prepare(&query)
+        .map_err(|e| format!("Failed to prepare scheduled_classes query: {}", e))?;
+    
+    let scheduled_classes: SqlResult<Vec<ScheduledClass>> = stmt
+        .query_map([], |row| {
+            Ok(ScheduledClass {
+                id: row.get(0)?,
+                teacher_id: row.get(1)?,
+                course_id: row.get(2)?,
+                day_id: row.get(3)?,
+                time_id: row.get(4)?,
+                campus_id: row.get(5)?,
+                venue_id: row.get(6)?,
+            })
+        })
+        .map_err(|e| format!("Failed to query scheduled_classes: {}", e))?
+        .collect();
+    
+    scheduled_classes.map_err(|e| format!("Failed to load scheduled_classes: {}", e))
+}
+
+fn load_teacher_unavailability(conn: &Connection, use_temp: bool) -> CommandResult<Vec<TeacherUnavailability>> {
+    let table = if use_temp { "teacher_unavailability_temp" } else { "teacher_unavailability" };
+    let query = format!("SELECT teacher_id, day_id, time_id FROM {}", table);
+    
+    let mut stmt = conn
+        .prepare(&query)
+        .map_err(|e| format!("Failed to prepare teacher_unavailability query: {}", e))?;
+    
+    let teacher_unavailability: SqlResult<Vec<TeacherUnavailability>> = stmt
+        .query_map([], |row| {
+            Ok(TeacherUnavailability {
+                teacher_id: row.get(0)?,
+                day_id: row.get(1)?,
+                time_id: row.get(2)?,
+            })
+        })
+        .map_err(|e| format!("Failed to query teacher_unavailability: {}", e))?
+        .collect();
+    
+    teacher_unavailability.map_err(|e| format!("Failed to load teacher_unavailability: {}", e))
+}
+
+fn load_schedule_density(conn: &Connection, use_temp: bool) -> CommandResult<Vec<ScheduleDensity>> {
+    let table = if use_temp { "schedule_density_temp" } else { "schedule_density" };
+    let query = format!("SELECT campus_id, day_id, time_id, count FROM {}", table);
+    
+    let mut stmt = conn
+        .prepare(&query)
+        .map_err(|e| format!("Failed to prepare schedule_density query: {}", e))?;
+    
+    let schedule_density: SqlResult<Vec<ScheduleDensity>> = stmt
+        .query_map([], |row| {
+            Ok(ScheduleDensity {
+                campus_id: row.get(0)?,
+                day_id: row.get(1)?,
+                time_id: row.get(2)?,
+                count: row.get(3)?,
+            })
+        })
+        .map_err(|e| format!("Failed to query schedule_density: {}", e))?
+        .collect();
+    
+    schedule_density.map_err(|e| format!("Failed to load schedule_density: {}", e))
 }
 
 // ============================================================================
@@ -685,73 +667,54 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert day: {}", e))?;
     }
     
-    // Insert campuses, venues, and schedule density
+    // Insert campuses
     let campus_table = format!("campuses{}", suffix);
-    let venue_table = format!("venues{}", suffix);
-    let density_table = format!("schedule_density{}", suffix);
-    
     for campus in &data.campuses {
         tx.execute(
             &format!("INSERT INTO {} (id, name) VALUES (?, ?)", campus_table),
             params![campus.id, campus.name],
         )
         .map_err(|e| format!("Failed to insert campus: {}", e))?;
-        
-        // Insert venues for this campus
-        for venue in &campus.venues {
-            tx.execute(
-                &format!(
-                    "INSERT INTO {} (id, campus_id, name, capacity) VALUES (?, ?, ?, ?)",
-                    venue_table
-                ),
-                params![venue.id, campus.id, venue.name, venue.capacity],
-            )
-            .map_err(|e| format!("Failed to insert venue: {}", e))?;
-        }
-        
-        // Insert schedule density for this campus
-        for density in &campus.schedule_density {
-            tx.execute(
-                &format!(
-                    "INSERT INTO {} (campus_id, day_id, time_id, count) VALUES (?, ?, ?, ?)",
-                    density_table
-                ),
-                params![campus.id, density.day_id, density.time_id, density.count],
-            )
-            .map_err(|e| format!("Failed to insert schedule density: {}", e))?;
-        }
     }
     
-    // Insert courses and course venues
-    let course_table = format!("courses{}", suffix);
-    let course_venue_table = format!("course_venues{}", suffix);
+    // Insert venues
+    let venue_table = format!("venues{}", suffix);
+    for venue in &data.venues {
+        tx.execute(
+            &format!(
+                "INSERT INTO {} (id, campus_id, name, capacity) VALUES (?, ?, ?, ?)",
+                venue_table
+            ),
+            params![venue.id, venue.campus_id, venue.name, venue.capacity],
+        )
+        .map_err(|e| format!("Failed to insert venue: {}", e))?;
+    }
     
+    // Insert courses
+    let course_table = format!("courses{}", suffix);
     for course in &data.courses {
         tx.execute(
             &format!("INSERT INTO {} (id, name) VALUES (?, ?)", course_table),
             params![course.id, course.name],
         )
         .map_err(|e| format!("Failed to insert course: {}", e))?;
-        
-        // Insert course venues
-        for place in &course.place {
-            tx.execute(
-                &format!(
-                    "INSERT INTO {} (course_id, campus_id, venue_id) VALUES (?, ?, ?)",
-                    course_venue_table
-                ),
-                params![course.id, place.campus_id, place.venue_id],
-            )
-            .map_err(|e| format!("Failed to insert course venue: {}", e))?;
-        }
     }
     
-    // Insert teachers and related data
-    let teacher_table = format!("teachers{}", suffix);
-    let teacher_course_table = format!("teacher_courses{}", suffix);
-    let unavail_table = format!("teacher_unavailability{}", suffix);
-    let scheduled_table = format!("scheduled_classes{}", suffix);
+    // Insert course venues
+    let course_venue_table = format!("course_venues{}", suffix);
+    for cv in &data.course_venues {
+        tx.execute(
+            &format!(
+                "INSERT INTO {} (course_id, venue_id) VALUES (?, ?)",
+                course_venue_table
+            ),
+            params![cv.course_id, cv.venue_id],
+        )
+        .map_err(|e| format!("Failed to insert course venue: {}", e))?;
+    }
     
+    // Insert teachers
+    let teacher_table = format!("teachers{}", suffix);
     for teacher in &data.teachers {
         tx.execute(
             &format!(
@@ -766,50 +729,66 @@ pub fn write_all_data_to_tables(
             ],
         )
         .map_err(|e| format!("Failed to insert teacher: {}", e))?;
-        
-        // Insert courses taught by this teacher
-        for course_id in &teacher.teaches {
-            tx.execute(
-                &format!(
-                    "INSERT INTO {} (teacher_id, course_id) VALUES (?, ?)",
-                    teacher_course_table
-                ),
-                params![teacher.id, course_id],
-            )
-            .map_err(|e| format!("Failed to insert teacher course: {}", e))?;
-        }
-        
-        // Insert unavailable slots
-        for blocked in &teacher.unavailable {
-            tx.execute(
-                &format!(
-                    "INSERT INTO {} (teacher_id, day_id, time_id) VALUES (?, ?, ?)",
-                    unavail_table
-                ),
-                params![teacher.id, blocked.day_id, blocked.time_id],
-            )
-            .map_err(|e| format!("Failed to insert unavailability: {}", e))?;
-        }
-        
-        // Insert scheduled classes
-        for scheduled in &teacher.scheduled {
-            tx.execute(
-                &format!(
-                    "INSERT INTO {} (id, teacher_id, course_id, day_id, time_id, campus_id, venue_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    scheduled_table
-                ),
-                params![
-                    scheduled.id,
-                    teacher.id,
-                    scheduled.course_id,
-                    scheduled.day_id,
-                    scheduled.time_id,
-                    scheduled.campus_id,
-                    scheduled.venue_id
-                ],
-            )
-            .map_err(|e| format!("Failed to insert scheduled class: {}", e))?;
-        }
+    }
+    
+    // Insert teacher courses
+    let teacher_course_table = format!("teacher_courses{}", suffix);
+    for tc in &data.teacher_courses {
+        tx.execute(
+            &format!(
+                "INSERT INTO {} (teacher_id, course_id) VALUES (?, ?)",
+                teacher_course_table
+            ),
+            params![tc.teacher_id, tc.course_id],
+        )
+        .map_err(|e| format!("Failed to insert teacher course: {}", e))?;
+    }
+    
+    // Insert teacher unavailability
+    let unavail_table = format!("teacher_unavailability{}", suffix);
+    for unavail in &data.teacher_unavailability {
+        tx.execute(
+            &format!(
+                "INSERT INTO {} (teacher_id, day_id, time_id) VALUES (?, ?, ?)",
+                unavail_table
+            ),
+            params![unavail.teacher_id, unavail.day_id, unavail.time_id],
+        )
+        .map_err(|e| format!("Failed to insert unavailability: {}", e))?;
+    }
+    
+    // Insert scheduled classes
+    let scheduled_table = format!("scheduled_classes{}", suffix);
+    for scheduled in &data.scheduled_classes {
+        tx.execute(
+            &format!(
+                "INSERT INTO {} (id, teacher_id, course_id, day_id, time_id, campus_id, venue_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                scheduled_table
+            ),
+            params![
+                scheduled.id,
+                scheduled.teacher_id,
+                scheduled.course_id,
+                scheduled.day_id,
+                scheduled.time_id,
+                scheduled.campus_id,
+                scheduled.venue_id
+            ],
+        )
+        .map_err(|e| format!("Failed to insert scheduled class: {}", e))?;
+    }
+    
+    // Insert schedule density
+    let density_table = format!("schedule_density{}", suffix);
+    for density in &data.schedule_density {
+        tx.execute(
+            &format!(
+                "INSERT INTO {} (campus_id, day_id, time_id, count) VALUES (?, ?, ?, ?)",
+                density_table
+            ),
+            params![density.campus_id, density.day_id, density.time_id, density.count],
+        )
+        .map_err(|e| format!("Failed to insert schedule density: {}", e))?;
     }
     
     Ok(())

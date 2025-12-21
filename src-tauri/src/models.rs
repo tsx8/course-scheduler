@@ -2,11 +2,28 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct AllData {
+    #[serde(default)]
     pub time: Vec<TimeSlot>,
+    #[serde(default)]
     pub day: Vec<Day>,
+    #[serde(default)]
     pub campuses: Vec<Campus>,
+    #[serde(default)]
+    pub venues: Vec<Venue>,
+    #[serde(default)]
     pub courses: Vec<Course>,
+    #[serde(default)]
     pub teachers: Vec<Teacher>,
+    #[serde(default)]
+    pub course_venues: Vec<CourseVenue>,
+    #[serde(default)]
+    pub teacher_courses: Vec<TeacherCourse>,
+    #[serde(default)]
+    pub scheduled_classes: Vec<ScheduledClass>,
+    #[serde(default)]
+    pub teacher_unavailability: Vec<TeacherUnavailability>,
+    #[serde(default)]
+    pub schedule_density: Vec<ScheduleDensity>,
 }
 
 /// Migration statistics returned after JSON-to-SQLite migration
@@ -37,13 +54,11 @@ pub struct Day {
 pub struct Campus {
     pub id: String,
     pub name: String,
-    pub venues: Vec<Venue>,
-    #[serde(default)]
-    pub schedule_density: Vec<ScheduleDensity>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ScheduleDensity {
+    pub campus_id: String,
     pub day_id: String,
     pub time_id: String,
     pub count: u32,
@@ -52,6 +67,7 @@ pub struct ScheduleDensity {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Venue {
     pub id: String,
+    pub campus_id: String,
     pub name: String,
     pub capacity: u32,
 }
@@ -60,12 +76,11 @@ pub struct Venue {
 pub struct Course {
     pub id: String,
     pub name: String,
-    pub place: Vec<CoursePlace>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CoursePlace {
-    pub campus_id: String,
+pub struct CourseVenue {
+    pub course_id: String,
     pub venue_id: String,
 }
 
@@ -75,24 +90,28 @@ pub struct Teacher {
     pub name: String,
     pub max_teaching_hours: u8,
     pub is_only_shahe: bool,
-    #[serde(default)]
-    pub unavailable: Vec<BlockedSlot>,
-    pub teaches: Vec<String>,
-    pub scheduled: Vec<ScheduledClass>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TeacherCourse {
+    pub teacher_id: String,
+    pub course_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ScheduledClass {
     pub id: String,
+    pub teacher_id: String,
+    pub course_id: String,
     pub day_id: String,
     pub time_id: String,
-    pub course_id: String,
     pub campus_id: String,
     pub venue_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct BlockedSlot {
+pub struct TeacherUnavailability {
+    pub teacher_id: String,
     pub day_id: String,
     pub time_id: String,
 }

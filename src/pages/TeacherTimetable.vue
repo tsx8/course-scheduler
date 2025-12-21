@@ -21,12 +21,11 @@ const selectedTeacher = computed(() => {
 });
 
 const scheduledHours = computed(() => {
-    if (!selectedTeacher.value || !selectedTeacher.value.scheduled?.length) {
-        return 0;
-    }
+    if (!selectedTeacherId.value) return 0;
+    const teacherSchedules = dataStore.scheduledClassesByTeacher(selectedTeacherId.value);
+    
     const timeHoursMap = new Map(dataStore.time.map(t => [t.id, t.corresponding_hours]));
-
-    return selectedTeacher.value.scheduled.reduce((total, schedule) => {
+    return teacherSchedules.reduce((total, schedule) => {
         const hours = timeHoursMap.get(schedule.time_id) || 0;
         return total + hours;
     }, 0);

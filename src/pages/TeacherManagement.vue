@@ -108,9 +108,12 @@ const createColumns = ({ onEdit, onDelete }) => [
         key: 'teaches',
         width: '25%',
         render: (row) => {
-            if (!row.teaches || row.teaches.length === 0) return '暂无';
-            return row.teaches.map(courseId => {
-                const course = dataStore.courses.find(c => c.id === courseId);
+            const relations = dataStore.teacherCoursesByTeacher(row.id);
+            
+            if (!relations || relations.length === 0) return '暂无';
+            
+            return relations.map(rel => {
+                const course = dataStore.courses.find(c => c.id === rel.course_id);
                 return course ? course.name : '未知课程';
             }).join('、 ');
         },
@@ -134,7 +137,9 @@ const createColumns = ({ onEdit, onDelete }) => [
 const columns = createColumns({
     onEdit: (teacher) => {
         isEditMode.value = true;
-        currentTeacher.value = JSON.parse(JSON.stringify(teacher)); // Deep copy for editing
+        const teacherData = JSON.parse(JSON.stringify(teacher));
+        teacherData.teaches = dataStore.teacherCoursesByTeacher(teacher.id).map(rel => rel.course_id);
+        currentTeacher.value = teacherData;
         showModal.value = true;
     },
     onDelete: (teacher) => {
