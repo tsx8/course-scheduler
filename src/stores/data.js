@@ -24,6 +24,7 @@ export const useDataStore = defineStore('data', () => {
     const day = ref([]);
     const isReverting = ref(false);
     const isSolving = ref(false);
+    const hasUnsavedChanges = ref(false);
 
     // Normalized relationship arrays
     const courseVenues = ref([]);
@@ -35,6 +36,12 @@ export const useDataStore = defineStore('data', () => {
     const selectedCampusIdForCampusView = ref(null);
     const selectedTeacherIdForTeacherView = ref(null);
     const selectedVenueIdForCampusView = ref(null);
+
+    const syncUnsavedStatus = async () => {
+        const status = await invoke('has_unsaved_changes');
+        hasUnsavedChanges.value = status;
+        console.log("Current Unsaved Status:", status);
+    };
 
     const debouncedSave = debounce(async (data) => {
         console.log('Saving temp data to backend...');
@@ -64,11 +71,10 @@ export const useDataStore = defineStore('data', () => {
         console.log('Initializing data from backend...');
         try {
             const loadedData = await invoke('load_data');
-            console.log('Raw loaded data:', loadedData);
-
             replaceAllData(loadedData);
-
             isInitialized.value = true;
+            await syncUnsavedStatus();
+
             console.log('Data initialized successfully.');
 
             // Set up event listener for commit-completed (T027)
@@ -96,6 +102,7 @@ export const useDataStore = defineStore('data', () => {
                 }),
                 (newState) => {
                     if (!isInitialized.value || isReverting.value) return;
+                    hasUnsavedChanges.value = true;
                     debouncedSave(newState);
                 },
                 { deep: true }
@@ -118,6 +125,7 @@ export const useDataStore = defineStore('data', () => {
         scheduledClasses.value = newData.scheduled_classes || [];
         teacherUnavailability.value = newData.teacher_unavailability || [];
         scheduleDensity.value = newData.schedule_density || [];
+        syncUnsavedStatus();
     };
 
     // Computed properties for normalized data relationships
@@ -154,6 +162,7 @@ export const useDataStore = defineStore('data', () => {
             const reloadedData = await invoke('load_data');
             console.log("Data reloaded from source.");
             replaceAllData(reloadedData);
+            await syncUnsavedStatus();
         } catch (error) {
             console.error("Failed to revert changes:", error);
             throw error;
@@ -242,6 +251,7 @@ export const useDataStore = defineStore('data', () => {
         try {
             await invoke('commit_data');
             console.log('Data committed successfully.');
+            await syncUnsavedStatus();
         } catch (error) {
             console.error('Failed to commit data:', error);
             throw error;
@@ -569,6 +579,8 @@ export const useDataStore = defineStore('data', () => {
         replaceAllData,
         revertChanges,
         commitChanges,
+        hasUnsavedChanges,
+        syncUnsavedStatus,
 
         getUnavailableMapForTeacher,
         toggleUnavailableSlot,

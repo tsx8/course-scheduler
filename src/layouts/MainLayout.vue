@@ -105,7 +105,7 @@ onUnmounted(() => {
 
 const renderIcon = (icon) => () => h(NIcon, null, { default: () => h(icon) });
 
-const menuOptions = ref([
+const menuOptions = computed(() => [
     {
         label: '校区总课表',
         key: 'CampusTimetable',
@@ -148,11 +148,13 @@ const menuOptions = ref([
         label: '保存更改',
         key: 'SaveChanges',
         icon: renderIcon(SaveIcon),
+        disabled: !dataStore.hasUnsavedChanges,
     },
     {
         label: '撤销所有更改',
         key: 'RevertChanges',
         icon: renderIcon(UndoIcon),
+        disabled: !dataStore.hasUnsavedChanges,
     },
     {
         label: '设置',
@@ -168,6 +170,7 @@ const handleMenuSelect = async (key) => {
         try {
             await dataStore.commitChanges();
             message.success('数据已成功保存！');
+            await dataStore.syncUnsavedStatus(); 
         } catch (err) {
             console.error("Save failed:", err);
             message.error(`保存失败: ${err}`);
@@ -184,6 +187,7 @@ const handleMenuSelect = async (key) => {
                 try {
                     await dataStore.revertChanges();
                     message.success('所有更改已成功撤销。');
+                    await dataStore.syncUnsavedStatus(); 
                 } catch (err) {
                     console.error("Revert failed:", err);
                     message.error(`撤销失败: ${err}`);

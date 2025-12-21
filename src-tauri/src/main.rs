@@ -218,6 +218,11 @@ fn open_logs_folder(app_handle: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[command]
+fn has_unsaved_changes(state: State<'_, AppState>) -> bool {
+    let db = state.db.lock().unwrap();
+    check_has_unsaved(&db)
+}
       
 #[command]
 async fn run_solver(
@@ -520,6 +525,7 @@ fn main() {
             db_handler::commit_data,
             db_handler::clear_temp_data,
             finalize_and_close,
+            has_unsaved_changes,
             run_solver,
             open_logs_folder,
             import_export::import_json,

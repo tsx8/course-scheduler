@@ -27,7 +27,7 @@ const handleExportData = async () => {
         if (filePath) {
             // Determine file type based on extension
             const isJson = filePath.toLowerCase().endsWith('.json');
-            
+
             if (isJson) {
                 await invoke('export_json', { filePath });
                 message.success('数据已导出为JSON格式！');
@@ -57,7 +57,7 @@ const handleImportData = async () => {
         if (selectedPath) {
             // Determine file type based on extension
             const isJson = selectedPath.toLowerCase().endsWith('.json');
-            
+
             let stats;
             if (isJson) {
                 stats = await invoke('import_json', { filePath: selectedPath });
@@ -66,7 +66,7 @@ const handleImportData = async () => {
                 stats = await invoke('import_database', { filePath: selectedPath });
                 message.success(`数据库已导入到临时区域！${stats.teachers}位教师，${stats.courses}门课程，${stats.schedules}个排课。请检查后点击"保存"提交。`);
             }
-            
+
             // Reload data to show imported data
             const reloadedData = await invoke('load_data');
             dataStore.replaceAllData(reloadedData);
@@ -274,13 +274,21 @@ const handleDaySubmit = () => {
                                 导入操作会将数据加载到临时区域，请检查后点击"保存"按钮提交。
                             </n-text>
                             <n-flex style="margin-top: 12px;">
-                                <n-button type="primary" @click="handleExportData">导出数据...</n-button>
+                                <n-tooltip :disabled="!dataStore.hasUnsavedChanges">
+                                    <template #trigger>
+                                        <n-button type="primary" @click="handleExportData"
+                                            :disabled="dataStore.hasUnsavedChanges">
+                                            导出数据...
+                                        </n-button>
+                                    </template>
+                                    请先保存当前修改后再导出数据
+                                </n-tooltip>
                                 <n-button @click="handleImportData">导入数据...</n-button>
                             </n-flex>
                         </div>
-                        
+
                         <n-divider style="margin: 8px 0;" />
-                        
+
                         <div>
                             <n-text strong>日志文件</n-text>
                             <n-text style="display: block; margin-top: 8px;">
