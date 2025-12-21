@@ -1,35 +1,21 @@
 <!--
-Sync Impact Report - Version 2.0.0
+Sync Impact Report - Version 2.1.0
 =========================================
-Version Change: 1.0.0 → 2.0.0
-Rationale: MAJOR version bump - Complete restructure to focus on programming principles rather than implementation details. Removed technology stack specifics (moved to copilot-instructions.md).
+Version Change: 2.0.0 → 2.1.0
+Rationale: MINOR version bump - Added explicit rule for Schedule Density as a manual constraint.
 
 Principles Modified:
-- I. Data Model Integrity → Cross-Language Schema Stability (renamed, clarified synchronization requirements)
-- II. Standalone Deployment → REMOVED (implementation detail, not a programming principle)
-- III. User-Centric Operations → REMOVED (UI/UX guideline, not a programming principle)
-- IV. Solver Integration → REMOVED (architectural detail, not a programming principle)
-- V. Version Management & Revertibility → State Isolation & Revertibility (renamed, clarified as general pattern)
+- III. Constraint Validation Alignment: Added rule specifying Schedule Density as a manual staff-defined constraint.
 
-Principles Added:
-- II. Referential Integrity Enforcement (NEW) - Cascading updates and orphan prevention
-- III. Constraint Validation Alignment (NEW) - Multi-layer validation consistency
-- IV. Single Source of Truth (NEW) - Authoritative state management
-- V. Separation of Concerns (NEW) - Clear component boundaries
-- VI. State Isolation & Revertibility (from old V, renamed)
-
-Section Changes:
-- REMOVED: "Deployment Requirements" (moved to copilot-instructions.md)
-- REMOVED: "Development Workflow" (moved to copilot-instructions.md)
-- REMOVED: "Technology Stack Constraints" (moved to copilot-instructions.md)
-- UPDATED: "Governance" section clarified to reference implementation docs
+Principles Added: None
+Principles Removed: None
 
 Templates Status:
-✅ plan-template.md - Constitution check now references programming principles only
-✅ spec-template.md - No changes needed (user story structure unaffected)
-✅ tasks-template.md - No changes needed (task organization unaffected)
+✅ plan-template.md - No changes needed (Principle III check remains valid)
+✅ spec-template.md - No changes needed
+✅ tasks-template.md - No changes needed
 
-Follow-up Items: None - all principles now properly scoped to programming practices
+Follow-up Items: None
 
 Last Updated: 2025-12-21
 -->
@@ -70,9 +56,10 @@ Business constraints MUST be enforced consistently across all system layers.
 - **UI Pre-Validation**: User interface MUST prevent invalid operations before submission (e.g., disable unavailable time slots)
 - **Backend Enforcement**: Server/backend MUST re-validate all constraints regardless of UI state (defense in depth)
 - **Solver Consistency**: Constraint solver MUST encode the same business rules as UI validations (e.g., teacher availability, venue capacity)
+- **Manual Constraint Definition**: Schedule density MUST be treated as a manual constraint specified by staff (maximum classes per campus per time slot), NOT an auto-calculated value derived from venue counts
 - **Single Rule Definition**: Constraints should be defined once and referenced by all layers, not duplicated in code
 
-**Rationale**: Inconsistent constraint enforcement leads to user confusion ("why did the UI allow me to do X if the solver rejects it?"). Alignment eliminates contradictory behaviors.
+**Rationale**: Inconsistent constraint enforcement leads to user confusion ("why did the UI allow me to do X if the solver rejects it?"). Alignment eliminates contradictory behaviors. Explicitly defining manual constraints like schedule density prevents the system from making incorrect assumptions about capacity.
 
 ### IV. Single Source of Truth
 
@@ -148,4 +135,4 @@ This constitution defines **programming principles** that govern code quality, m
 - **Build Instructions**: `README.md` (setup, dependencies, commands)
 - **Feature Specifications**: `specs/[###-feature]/spec.md` (requirements, acceptance criteria)
 
-**Version**: 2.0.0 | **Ratified**: 2025-12-19 | **Last Amended**: 2025-12-21
+**Version**: 2.1.0 | **Ratified**: 2025-12-19 | **Last Amended**: 2025-12-21
