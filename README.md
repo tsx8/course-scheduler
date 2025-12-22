@@ -10,7 +10,10 @@
 - 📅 **可视化时间表**: 直观的教师和校区课表展示
 - 💾 **临时保存机制**: 双表 SQLite 架构实现乐观临时-提交模式
 - 🗄️ **规范化数据库**: 符合第三范式的数据库设计，消除数据冗余
-- 📤 **导入导出**: 支持 JSON 和 SQLite 数据库文件的导入导出
+- 🔒 **RBAC 权限系统**: 基于角色的访问控制，支持 Scheduler 和 Teacher 两种角色
+- 📋 **审计日志**: 完整的操作审计追踪，记录所有数据变更历史
+- 👤 **用户管理**: 完善的用户账号管理，支持密码重置和角色分配
+- 🗃️ **导入导出**: 支持 JSON 和 SQLite 数据库文件的导入导出
 - 📝 **日志系统**: 自动记录应用运行日志,支持日期轮转和自动清理
 - 🚀 **原生性能**: 基于 Tauri 2 框架,体积小、速度快、资源占用低
 - 🪟 **Windows 专属**: 针对 Windows 10+ 优化的桌面体验
@@ -28,6 +31,7 @@
 - **Rust** - 系统级编程语言
 - **Tauri** - 构建跨平台桌面应用的框架
 - **SQLite** - 嵌入式关系数据库（通过 rusqlite 集成）
+- **bcrypt** - 密码哈希加密，保障用户账号安全
 - **Tracing** - 结构化日志系统,支持异步写入和日志轮转
 
 ### 排课引擎
@@ -82,37 +86,62 @@ npm run tauri build
 
 ## 📖 使用指南
 
+### 身份认证与权限
+
+**首次使用**:
+- 默认管理员账号: `admin`
+- 默认密码: `123456`
+- 首次登录后建议立即修改默认密码
+
+**角色说明**:
+- **Scheduler（排课员）**: 拥有完整系统权限，可管理所有数据、用户和查看审计日志
+- **Teacher（教师）**: 仅可查看个人课表和导出个人数据
+
 ### 基本工作流程
 
-1. **设置校区和场地**
+1. **登录系统**
+   - 使用用户名和密码登录
+   - 系统根据角色自动跳转到对应页面
+
+2. **用户管理**（仅 Scheduler）
+   - 在"用户管理"页面创建新用户
+   - 为用户分配角色（Scheduler 或 Teacher）
+   - 可选：为 Teacher 角色关联对应的教师信息
+   - 支持重置用户密码和删除账号
+
+3. **设置校区和场地**（仅 Scheduler）
    - 在"场地管理"页面添加校区
    - 为每个校区添加教学场地（教室）
    - 设置场地容量
    - 设置排课密度
 
-2. **创建课程**
+4. **创建课程**（仅 Scheduler）
    - 在"课程管理"页面添加课程
    - 指定课程可用的校区和场地
 
-3. **配置教师**
+5. **配置教师**（仅 Scheduler）
    - 在"教师管理"页面添加教师信息
    - 分配教师负责的课程
    - 设置教学时数上限
    - 标记不可用时间段
 
-4. **自动排课**
+6. **自动排课**（仅 Scheduler）
    - 点击"自动排课"按钮
    - 系统运行约束求解器生成时间表
-   - 结果自动保存到临时文件
+   - 结果自动保存到临时表
 
-5. **查看和调整**
-   - 在"教师课表"查看个人时间表
-   - 在"校区课表"查看整体安排
-   - 手动调整时间（可选）
+7. **查看和调整**
+   - **Scheduler**: 在"校区总课表"查看整体安排，可手动调整
+   - **Teacher**: 在"教师个人课表"查看自己的时间表
 
-6. **提交或回滚**
+8. **提交或回滚**（仅 Scheduler）
    - 满意后点击"提交更改"保存
    - 不满意点击"撤销更改"恢复到上次保存状态
+
+9. **审计追踪**（仅 Scheduler）
+   - 在"审计日志"页面查看所有操作记录
+   - 支持按时间、操作类型、用户等条件筛选
+   - 追踪数据变更历史和责任人
 
 ### 约束规则
 
@@ -140,29 +169,35 @@ npm run tauri build
 course-scheduler/
 ├── src/                      # Vue 前端源码
 │   ├── pages/               # 页面组件
+│   │   ├── Login.vue                 # 登录页面
 │   │   ├── CourseManagement.vue      # 课程管理
 │   │   ├── TeacherManagement.vue     # 教师管理
 │   │   ├── VenueManagement.vue       # 场地管理
 │   │   ├── TeacherTimetable.vue      # 教师课表
 │   │   ├── CampusTimetable.vue       # 校区课表
+│   │   ├── UserManagement.vue        # 用户管理（RBAC）
+│   │   ├── AuditLogs.vue             # 审计日志查看
 │   │   └── Settings.vue              # 设置和导入导出
 │   ├── stores/              # Pinia 状态管理
-│   │   └── data.js          # 核心数据存储 + 自动保存
+│   │   ├── data.js          # 核心数据存储 + 自动保存
+│   │   └── auth.js          # 认证和会话管理
 │   ├── components/          # 可复用组件
 │   │   └── ScheduleCell.vue          # 课表单元格
 │   ├── layouts/             # 布局组件
 │   │   └── MainLayout.vue            # 主布局 + 自定义标题栏
 │   └── router/              # 路由配置
-│       └── index.js
+│       └── index.js         # 路由定义 + RBAC 守卫
 ├── src-tauri/               # Rust 后端源码
 │   ├── src/
 │   │   ├── main.rs          # Tauri 主入口 + 求解器调用
 │   │   ├── models.rs        # AllData 数据模型定义
 │   │   ├── db_handler.rs    # SQLite 数据库操作 + 双表逻辑
+│   │   ├── auth.rs          # 密码哈希和验证（bcrypt）
+│   │   ├── audit.rs         # 审计日志记录
 │   │   ├── import_export.rs # 导入导出功能
 │   │   ├── single_instance.rs # 单实例运行控制
 │   │   └── lib.rs           # 库入口
-│   ├── schema.sql           # 数据库表结构定义（主表 + 临时表）
+│   ├── schema.sql           # 数据库表结构定义（主表 + 临时表 + RBAC 表）
 │   └── tauri.conf.json      # Tauri 配置 + 求解器 sidecar
 ├── solver/                  # Python 排课求解器
 │   ├── solver.py            # OR-Tools CP-SAT 约束模型
@@ -193,8 +228,8 @@ course-scheduler/
 ```
 
 **Windows 数据位置**:
-- 数据库文件: `%APPDATA%\Roaming\com.tsxb.course-scheduler\course_scheduler.db`
-- 日志文件: `%APPDATA%\Roaming\com.tsxb.course-scheduler\logs\course-scheduler-YYYY.MM.DD.log`
+- 数据库文件: `%APPDATA%\com.tsxb.course-scheduler\course_scheduler.db`
+- 日志文件: `%APPDATA%\com.tsxb.course-scheduler\logs\course-scheduler-YYYY.MM.DD.log`
 - 旧版 JSON: 首次启动自动迁移到 SQLite，备份为 `data.json.backup-YYYYMMDD-HHMMSS`
 
 **备份建议**: 定期复制 `course_scheduler.db` 文件到安全位置
@@ -452,17 +487,18 @@ npm run tauri build
 
 已完成:
 - [x] **SQLite 数据库**: ✅ 双表模式（主表 + 临时表）
-- [x] **导入导出功能**: ✅ JSON 和数据库文件格式
+- [x] **RBAC 权限系统**: ✅ 基于角色的访问控制
+- [x] **审计日志基础**: ✅ 操作记录和追踪
 - [x] **日志系统**: ✅ 日期轮转 + 自动清理
-- [x] **单实例运行**: ✅ 防止多实例冲突
 - [x] **自定义标题栏**: ✅ 无边框窗口 + 自定义最小化/最大化/关闭按钮
 
-计划中:
-- [ ] **冲突检测**: 实时显示排课冲突和约束违反
-- [ ] **Excel/PDF 导出**: 支持导出 Excel/PDF 格式课表
-- [ ] **统计分析**: 课程分布、教师工作量可视化
-- [ ] **校区 ID 解耦**: 移除 Shahe 校区硬编码 ID
-- [ ] **约束权重调优**: 优化求解器目标函数
+下一步计划:
+- [ ] **会话管理优化**: 移除进程锁机制，改由登录系统控制单账户单会话，提升多用户并发能力
+- [ ] **数据格式统一**: 移除旧版 JSON 格式兼容代码，全面采用规范化数据库架构
+- [ ] **审计系统增强**: 扩展审计日志类型支持（数据导入/导出、批量操作、系统配置变更），完善前后端联动
+- [ ] **导出功能完善**: 优化数据导出流程，支持选择性导出和多格式输出（CSV、Excel）
+- [ ] **冲突检测**: 实时显示排课冲突和约束违反提示
+- [ ] **统计分析**: 课程分布、教师工作量数据可视化
 
 ## 🤝 贡献
 
