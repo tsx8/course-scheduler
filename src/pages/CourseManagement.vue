@@ -57,7 +57,7 @@ watch(() => currentCourse.value.place, (newPlaces) => {
 
 const createColumns = ({ onEdit, onDelete }) => [
     // { title: 'ID', key: 'id', ellipsis: { tooltip: true }, width: 250 },
-    { title: '课程名称', key: 'name', sorter: (a, b) => a.name.localeCompare(b.name) },
+    { title: '课程名称', key: 'name', width: '20%', sorter: (a, b) => a.name.localeCompare(b.name) },
     {
         title: '上课地点',
         key: 'place',
@@ -114,7 +114,7 @@ const columns = createColumns({
     onDelete: (course) => {
         dialog.warning({
             title: '确认删除',
-            content: `确定要删除课程【${course.name}】吗？这将同时从教师的“可教课程”中移除该课程。此操作不可撤销。`,
+            content: `确定要删除课程【${course.name}】吗？这将同时从教师的“可教课程”中移除该课程。`,
             positiveText: '删除',
             negativeText: '取消',
             onPositiveClick: () => {

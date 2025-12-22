@@ -99,6 +99,43 @@ CREATE TABLE IF NOT EXISTS schedule_density (
 );
 
 -- ============================================================================
+-- RBAC AND AUDIT SYSTEM TABLES (Feature: 001-rbac-audit-system)
+-- ============================================================================
+
+-- Roles: Define user role types (main only - static seed data)
+CREATE TABLE IF NOT EXISTS roles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT
+);
+
+-- Users: Authentication and authorization (dual-table pattern)
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role_id TEXT NOT NULL,
+    teacher_id TEXT,
+    created_at TEXT NOT NULL,
+    last_login TEXT,
+    FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE RESTRICT,
+    FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE SET NULL
+);
+
+-- Audit Logs: System activity tracking (main table only - append-only)
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    target_table TEXT,
+    target_id TEXT,
+    timestamp TEXT NOT NULL,
+    change_details TEXT,
+    ip_address TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- ============================================================================
 -- TEMP TABLES (Working State - Identical Structure)
 -- ============================================================================
 
@@ -218,3 +255,13 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_classes_temp_course_id ON scheduled_cla
 CREATE INDEX IF NOT EXISTS idx_scheduled_classes_temp_venue_id ON scheduled_classes_temp(venue_id);
 CREATE INDEX IF NOT EXISTS idx_teacher_unavailability_temp_teacher_id ON teacher_unavailability_temp(teacher_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_density_temp_campus_id ON schedule_density_temp(campus_id);
+
+-- RBAC and Audit system indexes
+CREATE INDEX IF NOT EXISTS idx_roles_name ON roles(name);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role_id);
+CREATE INDEX IF NOT EXISTS idx_users_teacher ON users(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_logs(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action_type);
+CREATE INDEX IF NOT EXISTS idx_audit_table ON audit_logs(target_table);

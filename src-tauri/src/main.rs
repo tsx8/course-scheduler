@@ -1,6 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audit;
+mod auth;
 mod db_handler;
 mod import_export;
 mod models;
@@ -8,8 +10,9 @@ mod single_instance;
 
 use chrono::Local;
 use db_handler::AppState;
-use models::AllData;
-use rusqlite::Connection;
+use models::{AllData, AuditLogFilters, AuditLogsResponse, SessionStore, User};
+use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -21,6 +24,7 @@ use tokio::fs as async_fs;
 use tracing::{error, info, warn};
 use tracing_appender::non_blocking;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use uuid::Uuid;
 
 pub struct ShutdownState {
     is_closing_unconditionally: bool,
@@ -200,7 +204,406 @@ fn cleanup_old_logs(logs_dir: &PathBuf) {
     info!("Log cleanup completed");
 }
 
-/// Tauri command to open logs folder in Windows Explorer
+#[command]
+async fn record_audit_log(
+    action_type: String,
+    target_table: Option<String>,
+    target_id: Option<String>,
+    change_details: Option<serde_json::Value>,
+    session_id: String,
+    state: State<'_, AppState>,
+    sessions: State<'_, SessionStore>,
+) -> Result<(), String> {
+    let user_id = {
+        let sessions_guard = sessions.lock().unwrap();
+        sessions_guard.get(&session_id).map(|u| u.id.clone())
+    }
+    .ok_or("invalid session")?;
+
+    let db = state.db.lock().unwrap();
+
+    crate::audit::create_audit_log_entry(
+        &db,
+        &user_id,
+        &action_type,
+        target_table.as_deref(),
+        target_id.as_deref(),
+        change_details,
+        None,
+    )
+}
+
+#[command]
+async fn authenticate_user(
+    username: String,
+    password: String,
+    state: State<'_, AppState>,
+    sessions: State<'_, SessionStore>,
+) -> Result<serde_json::Value, String> {
+    use crate::audit::create_audit_log_entry;
+    use crate::auth::verify_password;
+
+    info!("Authentication attempt for user: {}", username);
+
+    let db = state.db.lock().unwrap();
+
+    // Query user from main users table
+    let result: Result<(String, String, String, String, String, Option<String>), _> = db.query_row(
+        "SELECT u.id, u.username, u.password_hash, r.name as role, u.role_id, u.teacher_id 
+         FROM users u 
+         JOIN roles r ON u.role_id = r.id 
+         WHERE u.username = ?1",
+        params![&username],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?, // role_id
+                row.get(5)?, // teacher_id
+            ))
+        },
+    );
+
+    match result {
+        Ok((user_id, username, password_hash, role_name, role_id, teacher_id)) => {
+            // 修改 2: 接收 role_id
+            match verify_password(&password, &password_hash) {
+                Ok(true) => {
+                    let session_id = Uuid::new_v4().to_string();
+                    let user = User {
+                        id: user_id.clone(),
+                        username: username.clone(),
+                        password_hash: None,
+                        role_id: role_id.clone(), // 修改 3: 正确赋值 role_id
+                        teacher_id: teacher_id.clone(),
+                        created_at: String::new(),
+                        last_login: None,
+                    };
+
+                    // Store session
+                    {
+                        let mut sessions_guard = sessions.lock().unwrap();
+                        sessions_guard.insert(session_id.clone(), user.clone());
+                    }
+
+                    // Update last_login timestamp
+                    let now = Local::now().to_rfc3339();
+                    let _ = db.execute(
+                        "UPDATE users SET last_login = ?1 WHERE id = ?2",
+                        params![&now, &user_id],
+                    );
+
+                    // Create audit log entry
+                    let _ = create_audit_log_entry(&db, &user_id, "LOGIN", None, None, None, None);
+
+                    info!("User {} authenticated successfully", username);
+
+                    Ok(serde_json::json!({
+                        "session_id": session_id,
+                        "user": {
+                            "id": user_id,
+                            "username": username,
+                            "role": role_name,
+                            "teacher_id": teacher_id,
+                            "last_login": now,
+                        }
+                    }))
+                }
+                Ok(false) => {
+                    warn!("Invalid password for user: {}", username);
+                    Err("Invalid username or password".to_string())
+                }
+                Err(e) => {
+                    error!("Password verification error: {}", e);
+                    Err("Authentication error".to_string())
+                }
+            }
+        }
+        Err(_) => {
+            warn!("User not found: {}", username);
+            Err("Invalid username or password".to_string())
+        }
+    }
+}
+
+/// Logout user and destroy session
+#[command]
+async fn logout_user(
+    session_id: String,
+    state: State<'_, AppState>,
+    sessions: State<'_, SessionStore>,
+) -> Result<bool, String> {
+    use crate::audit::create_audit_log_entry;
+
+    info!("Logout attempt for session: {}", session_id);
+
+    // Get user before removing session (for audit log)
+    let user_id = {
+        let sessions_guard = sessions.lock().unwrap();
+        sessions_guard.get(&session_id).map(|u| u.id.clone())
+    };
+
+    if let Some(uid) = user_id {
+        // Create audit log entry
+        let db = state.db.lock().unwrap();
+        let _ = create_audit_log_entry(&db, &uid, "LOGOUT", None, None, None, None);
+    }
+
+    // Remove session
+    let mut sessions_guard = sessions.lock().unwrap();
+    sessions_guard.remove(&session_id);
+
+    info!("Session {} logged out successfully", session_id);
+    Ok(true)
+}
+
+/// Get current user from session (for session restoration)
+#[command]
+async fn get_current_user(
+    session_id: String,
+    state: State<'_, AppState>,
+    sessions: State<'_, SessionStore>,
+) -> Result<serde_json::Value, String> {
+    // Check if session exists
+    let user = {
+        let sessions_guard = sessions.lock().unwrap();
+        sessions_guard.get(&session_id).cloned()
+    };
+
+    match user {
+        Some(user) => {
+            // Fetch full user details from database
+            let db = state.db.lock().unwrap();
+            let result: Result<(String, String, Option<String>, Option<String>), _> = db.query_row(
+                "SELECT u.username, r.name as role, u.teacher_id, u.last_login 
+                 FROM users u 
+                 JOIN roles r ON u.role_id = r.id 
+                 WHERE u.id = ?1",
+                params![&user.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            );
+
+            match result {
+                Ok((username, role, teacher_id, last_login)) => Ok(serde_json::json!({
+                    "id": user.id,
+                    "username": username,
+                    "role": role,
+                    "teacher_id": teacher_id,
+                    "last_login": last_login,
+                })),
+                Err(_) => Err("User not found".to_string()),
+            }
+        }
+        None => Err("Invalid session".to_string()),
+    }
+}
+
+// ============================================================================
+// USER MANAGEMENT COMMANDS (Feature: 001-rbac-audit-system - User Story 4)
+// ============================================================================
+
+/// List all users (Scheduler only)
+#[command]
+async fn list_users(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    let db = state.db.lock().unwrap();
+    db_handler::list_users(&db)
+}
+
+/// Create new user manually (Scheduler only)
+#[command]
+async fn create_user(
+    username: String,
+    password: String,
+    role_id: String,
+    teacher_id: Option<String>,
+    session_id: String,
+    state: State<'_, AppState>,
+    sessions: State<'_, SessionStore>,
+) -> Result<String, String> {
+    use crate::auth::hash_password;
+
+    // Get current user ID from session
+    let sessions_lock = sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
+    let current_user = sessions_lock
+        .get(&session_id)
+        .ok_or("Invalid session".to_string())?;
+    let creator_user_id = current_user.id.clone();
+    drop(sessions_lock);
+
+    // Hash password
+    let password_hash =
+        hash_password(&password).map_err(|e| format!("Failed to hash password: {}", e))?;
+
+    let db = state.db.lock().unwrap();
+    db_handler::create_user(
+        &db,
+        &username,
+        &password_hash,
+        &role_id,
+        teacher_id.as_deref(),
+        &creator_user_id,
+    )
+}
+
+/// Update user (Scheduler only)
+#[command]
+async fn update_user(
+    user_id: String,
+    role_id: String,
+    teacher_id: Option<String>,
+    session_id: String,
+    state: State<'_, AppState>,
+    sessions: State<'_, SessionStore>,
+) -> Result<(), String> {
+    // Get current user ID from session
+    let sessions_lock = sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
+    let current_user = sessions_lock
+        .get(&session_id)
+        .ok_or("Invalid session".to_string())?;
+    let current_user_id = current_user.id.clone();
+    drop(sessions_lock);
+
+    let db = state.db.lock().unwrap();
+    db_handler::update_user(
+        &db,
+        &user_id,
+        &role_id,
+        teacher_id.as_deref(),
+        &current_user_id,
+    )
+}
+
+/// Reset user password (Scheduler only)
+#[command]
+async fn reset_password(
+    user_id: String,
+    new_password: String,
+    session_id: String,
+    state: State<'_, AppState>,
+    sessions: State<'_, SessionStore>,
+) -> Result<(), String> {
+    use crate::auth::hash_password;
+
+    // Get current user ID from session
+    let sessions_lock = sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
+    let current_user = sessions_lock
+        .get(&session_id)
+        .ok_or("Invalid session".to_string())?;
+    let admin_user_id = current_user.id.clone();
+    drop(sessions_lock);
+
+    // Hash new password
+    let new_password_hash =
+        hash_password(&new_password).map_err(|e| format!("Failed to hash password: {}", e))?;
+
+    let db = state.db.lock().unwrap();
+    db_handler::reset_password(&db, &user_id, &new_password_hash, &admin_user_id)
+}
+
+/// Delete user account (Scheduler only)
+#[command]
+async fn delete_user(
+    user_id: String,
+    session_id: String,
+    state: State<'_, AppState>,
+    sessions: State<'_, SessionStore>,
+) -> Result<(), String> {
+    // Get current user ID from session
+    let sessions_lock = sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
+    let current_user = sessions_lock
+        .get(&session_id)
+        .ok_or("Invalid session".to_string())?;
+    let current_user_id = current_user.id.clone();
+    drop(sessions_lock);
+
+    let db = state.db.lock().unwrap();
+    db_handler::delete_user(&db, &user_id, &current_user_id)
+}
+
+/// Change own password (All users)
+#[command]
+async fn change_own_password(
+    old_password: String,
+    new_password: String,
+    session_id: String,
+    state: State<'_, AppState>,
+    sessions: State<'_, SessionStore>,
+) -> Result<(), String> {
+    use crate::auth::hash_password;
+
+    // Get current user ID from session
+    let sessions_lock = sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
+    let current_user = sessions_lock
+        .get(&session_id)
+        .ok_or("Invalid session".to_string())?;
+    let user_id = current_user.id.clone();
+    drop(sessions_lock);
+
+    // Hash new password
+    let new_password_hash =
+        hash_password(&new_password).map_err(|e| format!("Failed to hash password: {}", e))?;
+
+    let db = state.db.lock().unwrap();
+    db_handler::change_own_password(&db, &user_id, &old_password, &new_password_hash)
+}
+
+/// List audit logs with pagination and filters (Feature: 001-rbac-audit-system Phase 9)
+#[command]
+async fn list_audit_logs(
+    page: Option<usize>,
+    per_page: Option<usize>,
+    filters: Option<AuditLogFilters>,
+    session_id: String,
+    app_state: State<'_, AppState>,
+    sessions: State<'_, SessionStore>,
+) -> Result<AuditLogsResponse, String> {
+    info!("Listing audit logs - session: {}", session_id);
+
+    // Verify user is scheduler or admin
+    {
+        let sessions_lock = sessions
+            .lock()
+            .map_err(|_| "Failed to lock sessions".to_string())?;
+
+        let user = sessions_lock
+            .get(&session_id)
+            .ok_or("Invalid session".to_string())?;
+
+        let db = app_state.db.lock().unwrap();
+
+        let role_name: String = db
+            .query_row(
+                "SELECT name FROM roles WHERE id = ?",
+                params![&user.role_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to get role: {}", e))?;
+
+        if role_name != "Scheduler" && role_name != "Admin" {
+            return Err("Unauthorized: Only Schedulers can view audit logs".to_string());
+        }
+    }
+
+    let page = page.unwrap_or(1);
+    let per_page = per_page.unwrap_or(50).min(100);
+    let filters = filters.unwrap_or_default();
+
+    let db = app_state.db.lock().unwrap();
+    db_handler::query_audit_logs(&db, page, per_page, &filters)
+}
+
 #[command]
 fn open_logs_folder(app_handle: AppHandle) -> Result<(), String> {
     let logs_dir = app_handle
@@ -234,8 +637,21 @@ fn has_unsaved_changes(state: State<'_, AppState>) -> bool {
 async fn run_solver(
     app_handle: AppHandle,
     app_state: State<'_, AppState>,
+    session_id: String,
+    sessions: State<'_, SessionStore>,
 ) -> Result<AllData, String> {
     info!("Solver invoked");
+
+    // Get current user ID for audit logging
+    let uid = {
+        let sessions_lock = sessions
+            .lock()
+            .map_err(|_| "Failed to lock sessions".to_string())?;
+        sessions_lock
+            .get(&session_id)
+            .map(|user| user.id.clone())
+            .ok_or("Invalid session".to_string())?
+    };
 
     // Load current data from database (temp tables if they exist, else main tables)
     let current_data = db_handler::load_data(app_state.clone()).await?;
@@ -361,7 +777,11 @@ async fn run_solver(
 
     if !output.status.success() {
         let error_message = String::from_utf8_lossy(&output.stderr);
-        error!("Solver failed with exit code {:?}: {}", output.status.code(), error_message);
+        error!(
+            "Solver failed with exit code {:?}: {}",
+            output.status.code(),
+            error_message
+        );
         return Err(format!(
             "Solver failed with exit code {:?}:\n{}",
             output.status.code(),
@@ -385,7 +805,22 @@ async fn run_solver(
     let solved_data: AllData = serde_json::from_value(normalized_json)
         .map_err(|e| format!("Failed to parse normalized solver output: {}", e))?;
 
-    // 5. 保存并返回
+    {
+        let db = app_state.db.lock().unwrap();
+        let _ = crate::audit::create_audit_log_entry(
+            &db,
+            &uid,
+            "SOLVER_RUN",
+            None,
+            None,
+            Some(serde_json::json!({
+                "status": "success",
+                "message": "自动排课完成"
+            })),
+            None,
+        );
+    }
+
     db_handler::save_temp_data(solved_data.clone(), app_handle, app_state).await?;
 
     let _ = async_fs::remove_file(&input_path).await;
@@ -436,16 +871,24 @@ async fn finalize_and_close(
     app_handle: AppHandle,
     app_state: State<'_, AppState>,
     shutdown_state: State<'_, Arc<Mutex<ShutdownState>>>,
+    session_id: String,
+    sessions: State<'_, SessionStore>,
 ) -> Result<(), String> {
     if save {
         info!("Finalizing with save (committing data)");
         // Commit temp data to main tables
-        db_handler::commit_data(app_handle.clone(), app_state).await?;
+        db_handler::commit_data(
+            app_handle.clone(),
+            app_state,
+            session_id.clone(),
+            sessions.clone(),
+        )
+        .await?;
         info!("Data committed successfully");
     } else {
         info!("Finalizing without save (reverting changes)");
         // Clear temp data (revert)
-        db_handler::clear_temp_data(app_state).await?;
+        db_handler::clear_temp_data(app_state, session_id.clone(), sessions.clone()).await?;
         info!("Changes reverted successfully");
     }
 
@@ -545,6 +988,13 @@ fn main() {
             info!("Initializing database schema");
             db_handler::init_database(&conn).expect("Failed to initialize database schema");
 
+            // Run auth migration (seed roles and admin user)
+            info!("Running auth migration");
+            if let Err(e) = db_handler::run_auth_migration(&conn) {
+                warn!("Auth migration failed: {}", e);
+                // Non-critical - continue without admin user
+            }
+
             // Migrate from JSON if needed
             info!("Checking for JSON migration");
             match db_handler::migrate_from_json(&conn, &data_dir) {
@@ -576,6 +1026,10 @@ fn main() {
                 db: Mutex::new(conn),
             });
 
+            // Initialize session store for authentication
+            let sessions: SessionStore = Mutex::new(HashMap::new());
+            app.manage(sessions);
+
             // Register cleanup handler
             let data_dir_clone = data_dir.clone();
             app_handle.once("tauri://close-requested", move |_| {
@@ -606,10 +1060,22 @@ fn main() {
             db_handler::save_temp_data,
             db_handler::commit_data,
             db_handler::clear_temp_data,
+            db_handler::list_committed_teachers,
             finalize_and_close,
             has_unsaved_changes,
             run_solver,
             open_logs_folder,
+            authenticate_user,
+            logout_user,
+            get_current_user,
+            list_users,
+            create_user,
+            update_user,
+            reset_password,
+            delete_user,
+            change_own_password,
+            list_audit_logs,
+            record_audit_log,
             import_export::import_json,
             import_export::import_database,
             import_export::export_database,
@@ -618,23 +1084,11 @@ fn main() {
         .on_window_event(move |window, event| {
             match event {
                 WindowEvent::CloseRequested { api, .. } => {
-                    // Diagnostic logging for Issue #7 (white flash on close)
-                    info!("[CLOSE] CloseRequested event fired");
-                    if let Ok(position) = window.outer_position() {
-                        info!("[CLOSE] Window position: {:?}", position);
-                    }
-                    if let Ok(size) = window.outer_size() {
-                        info!("[CLOSE] Window size: {:?}", size);
-                    }
-                    if let Ok(monitor) = window.current_monitor() {
-                        info!("[CLOSE] Current monitor: {:?}", monitor);
-                    }
-                    if let Ok(monitors) = window.available_monitors() {
-                        let monitor_list: Vec<_> = monitors.into_iter().collect();
-                        info!("[CLOSE] Available monitors: {} total", monitor_list.len());
-                    }
-
-                    let app_state = window.state::<AppState>();
+                    let sessions = window.state::<SessionStore>();
+                    let has_active_session = {
+                        let sessions_guard = sessions.lock().unwrap();
+                        !sessions_guard.is_empty()
+                    };
                     let shutdown_state = window.state::<Arc<Mutex<ShutdownState>>>();
                     let mut is_closing = false;
 
@@ -642,44 +1096,15 @@ fn main() {
                         is_closing = state.is_closing_unconditionally;
                     }
 
-                    if is_closing {
-                        info!("Window close requested - unconditional close");
-                        // Clean up lockfile (T032)
+                    if is_closing || !has_active_session {
                         if let Ok(app_data_dir) = window.app_handle().path().app_data_dir() {
-                            info!("Cleaning up lockfile on close");
-                            if let Err(e) = single_instance::cleanup_lockfile(&app_data_dir) {
-                                error!("Failed to cleanup lockfile on close: {}", e);
-                            }
+                            let _ = single_instance::cleanup_lockfile(&app_data_dir);
                         }
                         return;
                     }
 
-                    // Check if temp tables have unsaved data
-                    let has_unsaved = {
-                        let db = app_state.db.lock();
-                        match db {
-                            Ok(db) => check_has_unsaved(&db),
-                            Err(e) => {
-                                warn!("Failed to acquire database lock for unsaved check: {}", e);
-                                false // Default to no unsaved data if can't access DB
-                            }
-                        }
-                    };
-
-                    if has_unsaved {
-                        info!("Window close requested - has unsaved changes, showing dialog");
-                        api.prevent_close();
-                        window.emit("show-close-dialog", ()).unwrap();
-                    } else {
-                        info!("Window close requested - no unsaved changes");
-                        // Clean up lockfile before allowing close (T032)
-                        if let Ok(app_data_dir) = window.app_handle().path().app_data_dir() {
-                            info!("Cleaning up lockfile on normal close");
-                            if let Err(e) = single_instance::cleanup_lockfile(&app_data_dir) {
-                                error!("Failed to cleanup lockfile: {}", e);
-                            }
-                        }
-                    }
+                    api.prevent_close();
+                    window.emit("show-close-dialog", ()).unwrap();
                 }
                 WindowEvent::Destroyed => {
                     // Final cleanup when window is destroyed (T032)

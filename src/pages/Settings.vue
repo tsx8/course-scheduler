@@ -6,12 +6,71 @@ import {
 } from 'naive-ui';
 import { AddOutline as AddIcon, CreateOutline as EditIcon, TrashOutline as DeleteIcon, FolderOpenOutline as FolderIcon } from '@vicons/ionicons5';
 import { useDataStore } from '../stores/data';
+import { useAuthStore } from '../stores/auth';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 
 const message = useMessage();
 const dialog = useDialog();
 const dataStore = useDataStore();
+const authStore = useAuthStore();
+
+// Password change state
+const showPasswordModal = ref(false);
+const passwordForm = ref({
+    oldPassword: '',
+    newPassword: '',
+    confirmPassword: ''
+});
+const passwordFormRef = ref(null);
+
+const passwordRules = {
+    oldPassword: { required: true, message: '请输入当前密码', trigger: 'blur' },
+    newPassword: [
+        { required: true, message: '请输入新密码', trigger: 'blur' },
+    ],
+    confirmPassword: [
+        { required: true, message: '请确认新密码', trigger: 'blur' },
+        {
+            validator: (rule, value) => {
+                return value === passwordForm.value.newPassword;
+            },
+            message: '两次输入的密码不一致',
+            trigger: ['blur', 'input']
+        }
+    ]
+};
+
+const handleOpenPasswordChange = () => {
+    passwordForm.value = {
+        oldPassword: '',
+        newPassword: '',
+        confirmPassword: ''
+    };
+    showPasswordModal.value = true;
+};
+
+const handlePasswordSubmit = () => {
+    passwordFormRef.value?.validate(async (errors) => {
+        if (!errors) {
+            try {
+                await invoke('change_own_password', {
+                    oldPassword: passwordForm.value.oldPassword,
+                    newPassword: passwordForm.value.newPassword,
+                    sessionId: authStore.sessionId
+                });
+
+                message.success('密码修改成功！下次登录请使用新密码。');
+                showPasswordModal.value = false;
+            } catch (error) {
+                console.error('Failed to change password:', error);
+                message.error(`修改密码失败: ${error}`);
+            }
+        } else {
+            message.error('请检查输入');
+        }
+    });
+};
 
 const handleExportData = async () => {
     try {
@@ -29,10 +88,10 @@ const handleExportData = async () => {
             const isJson = filePath.toLowerCase().endsWith('.json');
 
             if (isJson) {
-                await invoke('export_json', { filePath });
+                await invoke('export_json', { filePath, sessionId: authStore.sessionId });
                 message.success('数据已导出为JSON格式！');
             } else {
-                await invoke('export_database', { filePath });
+                await invoke('export_database', { filePath, sessionId: authStore.sessionId });
                 message.success('数据已导出为数据库格式！');
             }
         }
@@ -60,10 +119,10 @@ const handleImportData = async () => {
 
             let stats;
             if (isJson) {
-                stats = await invoke('import_json', { filePath: selectedPath });
+                stats = await invoke('import_json', { filePath: selectedPath, sessionId: authStore.sessionId });
                 message.success(`JSON数据已导入到临时区域！${stats.teachers}位教师，${stats.courses}门课程，${stats.schedules}个排课。请检查后点击"保存"提交。`);
             } else {
-                stats = await invoke('import_database', { filePath: selectedPath });
+                stats = await invoke('import_database', { filePath: selectedPath, sessionId: authStore.sessionId });
                 message.success(`数据库已导入到临时区域！${stats.teachers}位教师，${stats.courses}门课程，${stats.schedules}个排课。请检查后点击"保存"提交。`);
             }
 
@@ -111,8 +170,8 @@ const timeColumns = [
         render(row) {
             return h(NSpace, { justify: 'center' }, {
                 default: () => [
-                    h(NButton, { size: 'small', type: 'info', circle: true, onClick: () => handleEditTimeSlot(row) }, { icon: () => h(NIcon, { component: EditIcon }) }),
-                    h(NButton, { size: 'small', type: 'error', circle: true, onClick: () => handleDeleteTimeSlot(row) }, { icon: () => h(NIcon, { component: DeleteIcon }) })
+                    h(NButton, { size: 'small', type: 'info', onClick: () => handleEditTimeSlot(row) }, { icon: () => h(NIcon, { component: EditIcon }) }),
+                    h(NButton, { size: 'small', type: 'error', onClick: () => handleDeleteTimeSlot(row) }, { icon: () => h(NIcon, { component: DeleteIcon }) })
                 ]
             });
         }
@@ -134,7 +193,7 @@ const handleEditTimeSlot = (slot) => {
 const handleDeleteTimeSlot = (slot) => {
     dialog.warning({
         title: '确认删除',
-        content: `确定要删除时间段【${slot.value}】吗？所有引用该时间段的排课记录都将被删除。此操作不可撤销。`,
+        content: `确定要删除时间段【${slot.value}】吗？所有引用该时间段的排课记录都将被删除。`,
         positiveText: '删除',
         negativeText: '取消',
         onPositiveClick: () => {
@@ -179,8 +238,8 @@ const dayColumns = [
         render(row) {
             return h(NSpace, { justify: 'center' }, {
                 default: () => [
-                    h(NButton, { size: 'small', type: 'info', circle: true, onClick: () => handleEditDay(row) }, { icon: () => h(NIcon, { component: EditIcon }) }),
-                    h(NButton, { size: 'small', type: 'error', circle: true, onClick: () => handleDeleteDay(row) }, { icon: () => h(NIcon, { component: DeleteIcon }) })
+                    h(NButton, { size: 'small', type: 'info', onClick: () => handleEditDay(row) }, { icon: () => h(NIcon, { component: EditIcon }) }),
+                    h(NButton, { size: 'small', type: 'error', onClick: () => handleDeleteDay(row) }, { icon: () => h(NIcon, { component: DeleteIcon }) })
                 ]
             });
         }
@@ -202,7 +261,7 @@ const handleEditDay = (day) => {
 const handleDeleteDay = (day) => {
     dialog.warning({
         title: '确认删除',
-        content: `确定要删除工作日【${day.value}】吗？所有引用该工作日的排课记录都将被删除。此操作不可撤销。`,
+        content: `确定要删除工作日【${day.value}】吗？所有引用该工作日的排课记录都将被删除。`,
         positiveText: '删除',
         negativeText: '取消',
         onPositiveClick: () => {
@@ -241,7 +300,16 @@ const handleDaySubmit = () => {
         <n-layout-content content-style="padding: 24px;" style="height: calc(100vh - 156px); overflow: auto;"
             :native-scrollbar="false">
             <n-flex vertical :size="24">
-                <n-card title="上课时间管理">
+                <n-card title="账户安全">
+                    <n-flex vertical :size="12">
+                        <n-text>当前用户: <n-text strong>{{ authStore.currentUser?.username }}</n-text></n-text>
+                        <n-button type="primary" @click="handleOpenPasswordChange" style="max-width: 140px;">
+                            修改密码
+                        </n-button>
+                    </n-flex>
+                </n-card>
+
+                <n-card title="上课时间管理" v-if="authStore.isScheduler">
                     <n-flex vertical>
                         <n-text>管理课表中的时间段，例如“第一大节”、“第三大节”等。删除时间段会一并删除所有相关的排课记录。</n-text>
                         <n-button type="primary" @click="handleAddTimeSlot" style="max-width: 120px;">
@@ -253,7 +321,7 @@ const handleDaySubmit = () => {
                     </n-flex>
                 </n-card>
 
-                <n-card title="工作日管理">
+                <n-card title="工作日管理" v-if="authStore.isScheduler">
                     <n-flex vertical>
                         <n-text>管理课表中的工作日，例如“星期一”、“星期二”等。删除工作日会一并删除所有相关的排课记录。</n-text>
                         <n-button type="primary" @click="handleAddDay" style="max-width: 120px;">
@@ -265,7 +333,7 @@ const handleDaySubmit = () => {
                     </n-flex>
                 </n-card>
 
-                <n-card title="数据管理">
+                <n-card title="数据管理" v-if="authStore.isScheduler">
                     <n-flex vertical :size="16">
                         <div>
                             <n-text strong>导入/导出</n-text>
@@ -334,4 +402,24 @@ const handleDaySubmit = () => {
             </n-modal>
         </n-layout-content>
     </n-layout>
+
+    <!-- Password Change Modal -->
+    <n-modal v-model:show="showPasswordModal" preset="dialog" title="修改密码" positive-text="确认修改" negative-text="取消"
+        @positive-click="handlePasswordSubmit">
+        <n-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-placement="left"
+            label-width="120" style="margin-top: 16px;">
+            <n-form-item label="当前密码" path="oldPassword">
+                <n-input v-model:value="passwordForm.oldPassword" type="password" placeholder="请输入当前密码"
+                    show-password-on="click" />
+            </n-form-item>
+            <n-form-item label="新密码" path="newPassword">
+                <n-input v-model:value="passwordForm.newPassword" type="password" placeholder="请输入新密码"
+                    show-password-on="click" />
+            </n-form-item>
+            <n-form-item label="确认新密码" path="confirmPassword">
+                <n-input v-model:value="passwordForm.confirmPassword" type="password" placeholder="请再次输入新密码"
+                    show-password-on="click" />
+            </n-form-item>
+        </n-form>
+    </n-modal>
 </template>

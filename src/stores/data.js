@@ -3,6 +3,7 @@ import { ref, watch, toRaw, computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { v4 as uuidv4 } from 'uuid';
+import { useAuthStore } from './auth';
 
 function debounce(fn, delay) {
     let timeoutId = null;
@@ -32,6 +33,38 @@ export const useDataStore = defineStore('data', () => {
     const scheduledClasses = ref([]);
     const teacherUnavailability = ref([]);
     const scheduleDensity = ref([]);
+
+    // RBAC and Audit system arrays (Feature: 001-rbac-audit-system)
+    const roles = ref([]);
+    const users = ref([]);
+
+    const resetState = () => {
+        selectedCampusIdForCampusView.value = null;
+        selectedTeacherIdForTeacherView.value = null;
+        selectedVenueIdForCampusView.value = null;
+
+        hasUnsavedChanges.value = false;
+        isSolving.value = false;
+
+        console.log("Data store state has been reset.");
+    };
+
+    const reportAudit = async (actionType, table, id, details) => {
+        const authStore = useAuthStore();
+        if (!authStore.sessionId) return;
+
+        try {
+            await invoke('record_audit_log', {
+                actionType,
+                targetTable: table,
+                targetId: id,
+                changeDetails: details,
+                sessionId: authStore.sessionId
+            });
+        } catch (err) {
+            console.warn('audit upload failed', err);
+        }
+    };
 
     const selectedCampusIdForCampusView = ref(null);
     const selectedTeacherIdForTeacherView = ref(null);
@@ -125,6 +158,8 @@ export const useDataStore = defineStore('data', () => {
         scheduledClasses.value = newData.scheduled_classes || [];
         teacherUnavailability.value = newData.teacher_unavailability || [];
         scheduleDensity.value = newData.schedule_density || [];
+        roles.value = newData.roles || [];
+        users.value = newData.users || [];
         syncUnsavedStatus();
     };
 
@@ -157,7 +192,10 @@ export const useDataStore = defineStore('data', () => {
         console.log("Reverting changes...");
         isReverting.value = true;
         try {
-            await invoke('clear_temp_data');
+            const authStore = useAuthStore();
+            await invoke('clear_temp_data', {
+                sessionId: authStore.sessionId
+            });
             console.log("Temp data cleared.");
             const reloadedData = await invoke('load_data');
             console.log("Data reloaded from source.");
@@ -181,8 +219,8 @@ export const useDataStore = defineStore('data', () => {
     });
 
     const addTeacher = (teacherData) => {
-        const { id, ...data } = teacherData;
-        const newTeacher = { ...data, id: uuidv4() };
+        const newId = uuidv4();
+        const newTeacher = { ...teacherData, id: newId };
         teachers.value.push(newTeacher);
 
         // Handle teaches relationship
@@ -213,6 +251,7 @@ export const useDataStore = defineStore('data', () => {
                 });
             });
         }
+        reportAudit('TEACHER_CREATED', 'teachers', newId, { name: teacherData.name });
     };
     const updateTeacher = (updatedTeacher) => {
         const index = teachers.value.findIndex(t => t.id === updatedTeacher.id);
@@ -235,6 +274,7 @@ export const useDataStore = defineStore('data', () => {
         }
     };
     const deleteTeacher = (teacherId) => {
+        const teacher = teachers.value.find(t => t.id === teacherId);
         teachers.value = teachers.value.filter(t => t.id !== teacherId);
         // Remove related data
         teacherCourses.value = teacherCourses.value.filter(tc => tc.teacher_id !== teacherId);
@@ -244,12 +284,16 @@ export const useDataStore = defineStore('data', () => {
         if (selectedTeacherIdForTeacherView.value === teacherId) {
             selectedTeacherIdForTeacherView.value = null;
         }
+        reportAudit('TEACHER_DELETED', 'teachers', teacherId, { name: teacher?.name });
     };
 
     const commitChanges = async () => {
         console.log('Committing changes to backend...');
         try {
-            await invoke('commit_data');
+            const authStore = useAuthStore();
+            await invoke('commit_data', {
+                sessionId: authStore.sessionId
+            });
             console.log('Data committed successfully.');
             await syncUnsavedStatus();
         } catch (error) {
@@ -259,8 +303,8 @@ export const useDataStore = defineStore('data', () => {
     };
 
     const addCourse = (courseData) => {
-        const { id, ...data } = courseData;
-        const newCourse = { ...data, id: uuidv4() };
+        const newId = uuidv4();
+        const newCourse = { ...data, id: newId };
         courses.value.push(newCourse);
 
         // Handle place (venue) relationships
@@ -272,6 +316,8 @@ export const useDataStore = defineStore('data', () => {
                 });
             });
         }
+
+        reportAudit('COURSE_CREATED', 'courses', newId, { name: courseData.name });
     };
 
     const updateCourse = (updatedCourse) => {
@@ -498,8 +544,15 @@ export const useDataStore = defineStore('data', () => {
     });
 
     const addSchedule = (teacherId, scheduleData) => {
-        const newSchedule = { ...scheduleData, id: uuidv4(), teacher_id: teacherId };
+        const newId = uuidv4();
+        const newSchedule = { ...scheduleData, id: newId, teacher_id: teacherId };
         scheduledClasses.value.push(newSchedule);
+        reportAudit('SCHEDULE_MODIFIED', 'scheduled_classes', newId, {
+            action: '手工新增',
+            teacher_id: teacherId,
+            course_id: scheduleData.course_id,
+            time_slot: `${scheduleData.day_id}-${scheduleData.time_id}`
+        });
     };
 
     const updateSchedule = (teacherId, updatedSchedule) => {
@@ -510,7 +563,13 @@ export const useDataStore = defineStore('data', () => {
     };
 
     const deleteSchedule = (teacherId, scheduleId) => {
-        scheduledClasses.value = scheduledClasses.value.filter(s => !(s.id === scheduleId && s.teacher_id === teacherId));
+        const schedule = scheduledClasses.value.find(s => s.id === scheduleId);
+        scheduledClasses.value = scheduledClasses.value.filter(s => s.id !== scheduleId);
+
+        reportAudit('SCHEDULE_MODIFIED', 'scheduled_classes', scheduleId, {
+            action: '手工删除',
+            old_data: schedule
+        });
     };
 
     const toggleUnavailableSlot = (teacherId, dayId, timeId) => {
@@ -575,12 +634,15 @@ export const useDataStore = defineStore('data', () => {
         scheduledClasses,
         teacherUnavailability,
         scheduleDensity,
+        roles,
+        users,
         initializeData,
         replaceAllData,
         revertChanges,
         commitChanges,
         hasUnsavedChanges,
         syncUnsavedStatus,
+        resetState,
 
         getUnavailableMapForTeacher,
         toggleUnavailableSlot,

@@ -1,5 +1,11 @@
 <script setup>
+import { onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { NConfigProvider, NMessageProvider, NDialogProvider, NNotificationProvider } from 'naive-ui';
+import { useAuthStore } from './stores/auth';
+
+const router = useRouter();
+const authStore = useAuthStore();
 
 const themeOverrides = {
   common: {
@@ -7,6 +13,13 @@ const themeOverrides = {
     // primaryColorHover: '#4098fc',
   }
 };
+
+// Redirect to login if not authenticated
+onMounted(() => {
+  if (!authStore.isAuthenticated && router.currentRoute.value.meta.requiresAuth !== false) {
+    router.push('/login');
+  }
+});
 </script>
 
 <template>

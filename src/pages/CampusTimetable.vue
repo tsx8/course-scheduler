@@ -202,9 +202,9 @@ watch(() => dataStore.campuses, (newCampuses) => {
 <template>
     <n-layout style="height: calc(100vh - 96px);">
         <n-layout-header bordered style="padding: 12px 24px;">
-            <n-flex justify="space-between" align="center">
-                <n-h2 style="margin: 0;">校区总课表</n-h2>
-                <n-flex align="center">
+            <n-flex justify="space-between" align="center" :wrap="false">
+                <n-h2 style="margin: 0; white-space: nowrap; flex-shrink: 0;">校区总课表</n-h2>
+                <n-flex :wrap="false" align="center" style="flex-shrink: 1; overflow: hidden;">
                     <n-select v-model:value="selectedCampusId" placeholder="请选择校区" :options="campusOptions" clearable
                         style="width: 150px" />
                     <n-select v-model:value="selectedVenueId" placeholder="选择场地" :options="venueOptions" clearable

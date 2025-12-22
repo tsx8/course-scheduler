@@ -1,18 +1,48 @@
 <script setup>
-import { computed, h, watch } from 'vue';
+import { computed, h, watch, onMounted } from 'vue';
 import { useDataStore } from '../stores/data';
-import { NSelect, NDataTable, NSpace, NH2, NEmpty, NStatistic, NTag, NFlex, NLayout, NLayoutHeader, NLayoutContent } from 'naive-ui';
+import { useAuthStore } from '../stores/auth';
+import { NSelect, NDataTable, NSpace, NH2, NEmpty, NStatistic, NTag, NFlex, NLayout, NLayoutHeader, NLayoutContent, NButton, NIcon } from 'naive-ui';
+import { DownloadOutline as DownloadIcon } from '@vicons/ionicons5';
 import ScheduleCell from '../components/ScheduleCell.vue';
 
 const dataStore = useDataStore();
+const authStore = useAuthStore();
 
-const teacherOptions = computed(() => dataStore.teacherOptions);
+// For teachers, automatically select their own teacher_id; for schedulers, show dropdown
+const teacherOptions = computed(() => {
+    if (authStore.isTeacher) {
+        // Teacher can only see themselves
+        const currentTeacher = dataStore.teachers.find(t => t.id === authStore.currentUser?.teacher_id);
+        return currentTeacher ? [{ label: currentTeacher.name, value: currentTeacher.id }] : [];
+    }
+    return dataStore.teacherOptions;
+});
+
 const timeSlots = computed(() => dataStore.time);
 const days = computed(() => dataStore.day);
 
 const selectedTeacherId = computed({
-    get: () => dataStore.selectedTeacherIdForTeacherView,
-    set: (val) => { dataStore.selectedTeacherIdForTeacherView = val; }
+    get: () => {
+        // If user is a teacher, force selection to their teacher_id
+        if (authStore.isTeacher && authStore.currentUser?.teacher_id) {
+            return authStore.currentUser.teacher_id;
+        }
+        return dataStore.selectedTeacherIdForTeacherView;
+    },
+    set: (val) => {
+        // Only allow schedulers to change selection
+        if (authStore.isScheduler) {
+            dataStore.selectedTeacherIdForTeacherView = val;
+        }
+    }
+});
+
+// Auto-select teacher on mount for teacher role users
+onMounted(() => {
+    if (authStore.isTeacher && authStore.currentUser?.teacher_id) {
+        dataStore.selectedTeacherIdForTeacherView = authStore.currentUser.teacher_id;
+    }
 });
 
 const selectedTeacher = computed(() => {
@@ -23,7 +53,7 @@ const selectedTeacher = computed(() => {
 const scheduledHours = computed(() => {
     if (!selectedTeacherId.value) return 0;
     const teacherSchedules = dataStore.scheduledClassesByTeacher(selectedTeacherId.value);
-    
+
     const timeHoursMap = new Map(dataStore.time.map(t => [t.id, t.corresponding_hours]));
     return teacherSchedules.reduce((total, schedule) => {
         const hours = timeHoursMap.get(schedule.time_id) || 0;
@@ -82,6 +112,51 @@ const columns = computed(() => {
     ];
 });
 
+// CSV export function for teacher timetable
+const exportCSV = () => {
+    if (!selectedTeacherId.value || !selectedTeacher.value) return;
+
+    const teacher = selectedTeacher.value;
+    const teacherSchedules = dataStore.scheduledClassesByTeacher(selectedTeacherId.value);
+
+    // Build CSV header
+    let csv = '\uFEFF'; // UTF-8 BOM for Excel compatibility
+    csv += `教师课表,${teacher.name}\n`;
+    csv += '时间段,';
+    days.value.forEach(day => {
+        csv += `${day.value},`;
+    });
+    csv += '\n';
+
+    // Build CSV rows
+    timeSlots.value.forEach(time => {
+        csv += `${time.value},`;
+        days.value.forEach(day => {
+            const schedule = teacherSchedules.find(s => s.day_id === day.id && s.time_id === time.id);
+            if (schedule) {
+                const course = dataStore.courses.find(c => c.id === schedule.course_id);
+                const campus = dataStore.campuses.find(c => c.id === schedule.campus_id);
+                const venue = dataStore.venues.find(v => v.id === schedule.venue_id);
+                csv += `"${course?.name || ''} - ${campus?.name || ''} - ${venue?.name || ''}",`;
+            } else {
+                csv += ',';
+            }
+        });
+        csv += '\n';
+    });
+
+    // Download CSV
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${teacher.name}_课表.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+};
+
 watch(() => dataStore.teachers, (newTeachers) => {
     if (selectedTeacherId.value && !newTeachers.find(t => t.id === selectedTeacherId.value)) {
         selectedTeacherId.value = null;
@@ -91,43 +166,59 @@ watch(() => dataStore.teachers, (newTeachers) => {
 </script>
 
 <template>
-    <n-layout style="height: calc(100vh - 96px);">
+    <n-layout style="height: calc(100vh - 96px); position: relative;">
         <n-layout-header bordered style="padding: 12px 24px;">
-            <n-flex justify="space-between" align="center">
-                <n-h2 style="margin: 0;">教师个人课表</n-h2>
-                <n-select v-model:value="selectedTeacherId" placeholder="请选择教师" :options="teacherOptions" filterable
-                    clearable style="width: 250px" />
+            <n-flex justify="space-between" align="center" :wrap="false">
+                <n-h2 style="margin: 0; white-space: nowrap; flex-shrink: 0;">教师个人课表</n-h2>
+                <n-space :wrap="false" align="center" style="flex-shrink: 1; overflow: hidden;">
+                    <n-select v-if="authStore.isScheduler" v-model:value="selectedTeacherId" placeholder="请选择教师"
+                        :options="teacherOptions" filterable :clearable="authStore.isScheduler"
+                        :disabled="authStore.isTeacher" style="width: 200px" />
+                    <n-button :disabled="!selectedTeacherId" type="primary" @click="exportCSV">
+                        <template #icon>
+                            <n-icon>
+                                <DownloadIcon />
+                            </n-icon>
+                        </template>
+                        导出 CSV
+                    </n-button>
+                </n-space>
             </n-flex>
         </n-layout-header>
 
         <n-layout-content content-style="padding: 24px;" style="height: calc(100vh - 156px); overflow: auto;"
             :native-scrollbar="false">
-            <n-data-table v-if="selectedTeacherId" :columns="columns" :data="tableData" :bordered="true"
+            <n-flex v-if="authStore.isTeacher && !authStore.currentUser?.teacher_id" justify="center" align="center"
+                style="flex: 1;">
+                <n-empty description="暂无课表" size="huge" />
+            </n-flex>
+            <n-data-table v-else-if="selectedTeacherId" :columns="columns" :data="tableData" :bordered="true"
                 :single-line="false" style="width: 100%;" />
             <n-flex v-else justify="center" align="center" style="flex: 1;">
                 <n-empty description="请先选择一位教师以管理其课表" size="huge" />
             </n-flex>
         </n-layout-content>
+
+        <div class="fixed-footer-stats" v-if="selectedTeacher">
+            <n-space align="baseline" :size="20">
+                <n-tag v-if="isOverLimit" type="error" size="small">课时超限</n-tag>
+                <n-statistic label="已排课时">
+                    <span
+                        :style="{ color: isOverLimit ? '#d03050' : 'inherit', fontWeight: isOverLimit ? 'bold' : 'inherit' }">
+                        {{ scheduledHours }}
+                    </span>
+                </n-statistic>
+                <n-statistic label="最大课时">
+                    {{ maxHours }}
+                </n-statistic>
+            </n-space>
+        </div>
     </n-layout>
-    <div class="fixed-footer-stats">
-        <n-space v-if="selectedTeacher" align="baseline" :size="20">
-            <n-tag v-if="isOverLimit" type="error" size="small">课时超限</n-tag>
-            <n-statistic label="已排课时">
-                <span
-                    :style="{ color: isOverLimit ? '#d03050' : 'inherit', fontWeight: isOverLimit ? 'bold' : 'inherit' }">
-                    {{ scheduledHours }}
-                </span>
-            </n-statistic>
-            <n-statistic label="最大课时">
-                {{ maxHours }}
-            </n-statistic>
-        </n-space>
-    </div>
 </template>
 
 <style scoped>
 .fixed-footer-stats {
-    position: fixed;
+    position: absolute;
     bottom: 20px;
     right: 24px;
     z-index: 100;

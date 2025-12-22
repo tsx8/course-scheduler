@@ -145,7 +145,7 @@ const columns = createColumns({
     onDelete: (teacher) => {
         dialog.warning({
             title: '确认删除',
-            content: `确定要删除教师【${teacher.name}】吗？此操作不可撤销。`,
+            content: `确定要删除教师【${teacher.name}】吗？`,
             positiveText: '删除',
             negativeText: '取消',
             onPositiveClick: () => {
