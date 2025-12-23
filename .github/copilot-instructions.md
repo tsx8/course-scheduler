@@ -15,7 +15,7 @@
 ## Critical Data Flow: Optimistic Temp-to-Commit Pattern
 
 **Dual-table SQLite architecture** - every entity has main + temp tables:
-- Edit in UI → Auto-save to `*_temp` tables (100ms debounce in [data.js](../src/stores/data.js))
+- Edit in UI → Auto-save to `*_temp` tables (100ms debounce in `src/stores/data.js`)
 - User clicks "提交更改" → `commit_data` Rust command → Copy temp → main tables
 - User clicks "撤销更改" → `clear_temp_data` → Reload from main tables
 
@@ -50,9 +50,9 @@ npm run tauri build    # Output: src-tauri/target/release/bundle/nsis/
 
 ### Solver Integration
 The Python solver is a **sidecar binary** (not a library):
-- Build: [solver/solver.spec](../solver/solver.spec) → PyInstaller → [scripts/prepare-solver.js](../scripts/prepare-solver.js) → `src-tauri/binaries/solver-{target}.exe`
+- Build: `solver/solver.spec` → PyInstaller → `scripts/prepare-solver.js` → `src-tauri/binaries/solver-{target}.exe`
 - Runtime: Tauri spawns subprocess via `shell` plugin, pipes JSON via stdin/stdout
-- See [main.rs#solve_schedule](../src-tauri/src/main.rs) for invocation pattern
+- See `src-tauri/src/main.rs` for invocation pattern
 
 ```rust
 // DO NOT call solver as library - it's a spawned process
@@ -62,11 +62,11 @@ sidecar.args(&["--input", &json_str])
 ```
 
 ### Database Migrations
-Schema is in [schema.sql](../src-tauri/schema.sql) - executed on first run:
+Schema is in `src-tauri/schema.sql` - executed on first run:
 ```rust
 // src-tauri/src/db_handler.rs
 pub fn init_database(conn: &Connection) -> SqlResult<()> {
-    conn.execute_batch(include_str!("../schema.sql"))?;
+    conn.execute_batch(include_str!("schema.sql"))?;
 }
 ```
 
@@ -76,7 +76,7 @@ pub fn init_database(conn: &Connection) -> SqlResult<()> {
 
 ### Rust Backend Patterns
 
-**Command Structure** (see [main.rs](../src-tauri/src/main.rs)):
+**Command Structure** (see `src-tauri/src/main.rs`):
 ```rust
 #[command]
 fn my_command(state: State<AppState>) -> Result<T, String> {
@@ -87,8 +87,10 @@ fn my_command(state: State<AppState>) -> Result<T, String> {
 ```
 
 **Audit Logging** (Feature: 001-rbac-audit-system):
-- Every state-changing operation must call `audit::create_audit_log_entry`
-- Frontend calls `record_audit_log` command after mutations (see [data.js#reportAudit](../src/stores/data.js))
+- Every state-changing operation must call `audit::create_audit_log_entry`.
+- **Dual-table Audit**: Audit logs also follow the temp-to-commit pattern. Logs for uncommitted changes are stored in `audit_logs_temp` and moved to `audit_logs` upon `commit_data`.
+- **Rich Tracking**: Frontend uses `jsComputeDiff` in `src/stores/data.js` to generate detailed field-level changes for audit logs.
+- Frontend calls `record_audit_log` command after mutations.
 - Audit failures are logged but DO NOT block operations
 
 **Error Handling**:
@@ -99,10 +101,10 @@ fn my_command(state: State<AppState>) -> Result<T, String> {
 ### Frontend Patterns
 
 **State Management** (Pinia stores):
-- [data.js](../src/stores/data.js): ALL application data + auto-save logic
-- [auth.js](../src/stores/auth.js): Session, roles (Scheduler vs Teacher), RBAC checks
+- `src/stores/data.js`: ALL application data + auto-save logic
+- `src/stores/auth.js`: Session, roles (Scheduler vs Teacher), RBAC checks
 
-**RBAC Guards** in [router/index.js](../src/router/index.js):
+**RBAC Guards** in `src/router/index.js`:
 ```javascript
 meta: { requiresScheduler: true }  // Blocks Teacher role
 ```
@@ -124,7 +126,7 @@ const result = await invoke('command_name', { param: value });
 ## Integration Points
 
 ### Solver Input/Output Format
-See [solver.py](../solver/solver.py) for JSON schema:
+See `solver/solver.py` for JSON schema:
 ```json
 {
   "time": [{"id": "uuid", "value": "周一1-2节", "corresponding_hours": 2}],
@@ -150,7 +152,7 @@ See [solver.py](../solver/solver.py) for JSON schema:
 - Test with: `echo $env:APPDATA` in PowerShell
 
 ### External Dependencies
-- **OR-Tools**: Bundled in solver binary (PyInstaller collects `.pyd` via [solver.spec](../solver/solver.spec))
+- **OR-Tools**: Bundled in solver binary (PyInstaller collects `.pyd` via `solver/solver.spec`)
 - **SQLite**: Embedded via `rusqlite` (bundled feature)
 - **Naive UI**: Auto-imported components via unplugin-vue-components
 
@@ -161,7 +163,7 @@ See [solver.py](../solver/solver.py) for JSON schema:
 3. **Session expiry**: Auth checks expect `sessionId` - restore from localStorage on mount
 4. **Windows paths**: Use `PathBuf` and `std::path`, never hardcode `\` separators
 5. **Foreign keys**: Enabled by default (`PRAGMA foreign_keys = ON`) - cascades matter
-6. **Log file deletion**: App recreates logs if externally deleted (see [main.rs#ReopenableLogWriter](../src-tauri/src/main.rs))
+6. **Log file deletion**: App recreates logs if externally deleted (see `src-tauri/src/main.rs`)
 
 ## Testing Approach
 
@@ -179,7 +181,7 @@ See [solver.py](../solver/solver.py) for JSON schema:
 - ✅ SQLite migration complete (replaced file-based JSON)
 - ✅ RBAC + Audit system (Feature: 001-rbac-audit-system)
 - ✅ Normalized 3NF database schema
-- ✅ Single-instance enforcement (Windows mutex in [single_instance.rs](../src-tauri/src/single_instance.rs))
+- ✅ Single-instance enforcement (Windows mutex in `src-tauri/src/single_instance.rs`)
 - ⚠️ Legacy JSON import compatibility (to be deprecated)
 - 🚧 Cross-platform NOT supported (Windows-only by design)
 
@@ -191,25 +193,20 @@ See [solver.py](../solver/solver.py) for JSON schema:
 - **Benefits**: Support multiple concurrent users, better scalability
 
 ### Data Format Unification
-- **Action**: Remove legacy JSON compatibility layer in [import_export.rs](../src-tauri/src/import_export.rs)
+- **Action**: Remove legacy JSON compatibility layer in `src-tauri/src/import_export.rs`
 - **Rationale**: Simplify codebase, enforce normalized schema
 - **Migration**: One-time migration already handles old data
 
-### Audit System Enhancement
-- **Expand coverage**: Import/export operations, bulk updates, system config changes
-- **Frontend support**: New audit action types in [AuditLogs.vue](../src/pages/AuditLogs.vue)
-- **Backend**: Extend `action_type` enum in [audit.rs](../src-tauri/src/audit.rs)
-
 ### Export Functionality
 - **Selective export**: Allow filtering data before export
-- **Format expansion**: Add CSV/Excel output alongside SQLite/JSON
+- **Format expansion**: Add CSV/Excel output alongside SQLite/JSON`
 - **User experience**: Progress indicators for large exports
 
 ## When Working on Features
 
 1. **Database changes**: Update schema.sql → Migrate temp table logic → Test commit/revert
-2. **UI changes**: Check if Scheduler vs Teacher permissions matter (see [auth.js](../src/stores/auth.js))
-3. **Solver changes**: Modify [solver.py](../solver/solver.py) → Rebuild → Test via UI
+2. **UI changes**: Check if Scheduler vs Teacher permissions matter (see `src/stores/auth.js`)
+3. **Solver changes**: Modify `solver/solver.py` → Rebuild → Test via UI
 4. **RBAC changes**: Update audit logs + session handling + router guards
 5. **Session refactor**: Consider multi-user concurrency and session timeout handling
 
@@ -217,5 +214,5 @@ See [solver.py](../solver/solver.py) for JSON schema:
 
 - Tauri docs: https://tauri.app/v2/
 - OR-Tools CP-SAT: https://developers.google.com/optimization/cp/cp_solver
-- Schema definition: [schema.sql](../src-tauri/schema.sql)
-- Main README: [README.md](../README.md)
+- Schema definition: `src-tauri/schema.sql`
+- Main README: `README.md`
