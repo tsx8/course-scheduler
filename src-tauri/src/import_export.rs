@@ -282,8 +282,11 @@ pub async fn import_json(
 
     let json_value = process_json_format(json_value);
 
-    let all_data: AllData = serde_json::from_value(json_value)
+    let mut all_data: AllData = serde_json::from_value(json_value)
         .map_err(|e| format!("Invalid JSON format in {}: {}", file_path, e))?;
+
+    all_data.users = Vec::new();
+    all_data.roles = Vec::new();
 
     let teacher_count = all_data.teachers.len();
     let course_count = all_data.courses.len();
@@ -334,6 +337,7 @@ pub async fn import_json(
         None,
         Some(change_details),
         None,
+        true,
     );
 
     Ok(ImportStats {
@@ -395,7 +399,7 @@ pub async fn import_database(
     info!("Source database schema validated");
 
     // Read all data from source database main tables and convert to AllData
-    let all_data = load_all_data_from_connection(&source_conn, false)?;
+    let all_data = load_all_data_from_connection(&source_conn, false, false)?;
 
     let teacher_count = all_data.teachers.len();
     let course_count = all_data.courses.len();
@@ -445,6 +449,7 @@ pub async fn import_database(
                 None,
                 Some(change_details),
                 None,
+                true,
             ) {
                 warn!("Failed to create audit log for database import: {}", e);
             }
@@ -489,7 +494,7 @@ pub async fn export_database(
         format!("Failed to acquire database lock: {}", e)
     })?;
 
-    let all_data = crate::db_handler::load_all_data_from_connection(&*db, false)?;
+    let all_data = crate::db_handler::load_all_data_from_connection(&*db, false, false)?;
 
     info!(
         "Loaded data from main tables: {} teachers, {} courses",
@@ -530,6 +535,7 @@ pub async fn export_database(
                 None,
                 Some(change_details),
                 None,
+                false,
             ) {
                 warn!("Failed to create audit log for database export: {}", e);
             }
@@ -555,7 +561,7 @@ pub async fn export_json(
         format!("Failed to acquire database lock: {}", e)
     })?;
 
-    let all_data = crate::db_handler::load_all_data_from_connection(&*db, false)?;
+    let all_data = crate::db_handler::load_all_data_from_connection(&*db, false, false)?;
 
     info!(
         "Loaded temp data: {} teachers, {} courses",
@@ -595,6 +601,7 @@ pub async fn export_json(
                 None,
                 Some(change_details),
                 None,
+                false,
             ) {
                 warn!("Failed to create audit log for JSON export: {}", e);
             }

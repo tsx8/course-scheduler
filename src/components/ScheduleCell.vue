@@ -145,7 +145,7 @@ const handleDelete = () => {
         positiveText: '删除',
         negativeText: '取消',
         onPositiveClick: () => {
-            dataStore.deleteSchedule(props.teacherId, scheduleForCell.value.id);
+            dataStore.deleteSchedule(scheduleForCell.value.id);
             message.success('排课已删除');
         },
     });

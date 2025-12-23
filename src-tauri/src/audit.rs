@@ -38,15 +38,26 @@ pub fn create_audit_log_entry(
     target_id: Option<&str>,
     change_details: Option<Value>,
     ip_address: Option<&str>,
+    is_temp: bool,
 ) -> Result<(), String> {
     let id = Uuid::new_v4().to_string();
     let timestamp = Local::now().to_rfc3339();
-
     let details_json = change_details.map(|v| v.to_string());
 
-    let result = conn.execute(
-        "INSERT INTO audit_logs (id, user_id, action_type, target_table, target_id, timestamp, change_details, ip_address)
+    let table_name = if is_temp {
+        "audit_logs_temp"
+    } else {
+        "audit_logs"
+    };
+
+    let sql = format!(
+        "INSERT INTO {} (id, user_id, action_type, target_table, target_id, timestamp, change_details, ip_address)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        table_name
+    );
+
+    let result = conn.execute(
+        &sql,
         params![
             id,
             user_id,

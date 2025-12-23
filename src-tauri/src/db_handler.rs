@@ -7,7 +7,7 @@ use crate::import_export::process_json_format;
 use crate::models::*;
 use chrono::Local;
 use rusqlite::{params, Connection, Result as SqlResult, Transaction};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::path::Path;
 use std::sync::Mutex;
 use tauri::State;
@@ -170,10 +170,13 @@ pub fn auto_create_user_for_teacher(
         Some("users"),
         Some(&user_id),
         Some(json!({
-            "teacher_name": teacher_name,
-            "username": username
+            "target_name": username,
+            "action": "自动创建账号",
+            "role_name": "Teacher",
+            "teacher_name": teacher_name
         })),
         None,
+        false,
     );
 
     info!(
@@ -482,6 +485,39 @@ pub async fn commit_data(
         format!("Failed to begin transaction: {}", e)
     })?;
 
+    let mut changes_summary = serde_json::Map::new();
+
+    let teachers_changed: Vec<String> = tx
+        .prepare("SELECT name FROM teachers_temp")
+        .map_err(|e| e.to_string())?
+        .query_map([], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !teachers_changed.is_empty() {
+        changes_summary.insert("teachers".to_string(), json!(teachers_changed));
+    }
+
+    let courses_changed: Vec<String> = tx
+        .prepare("SELECT name FROM courses_temp")
+        .map_err(|e| e.to_string())?
+        .query_map([], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !courses_changed.is_empty() {
+        changes_summary.insert("courses".to_string(), json!(courses_changed));
+    }
+
+    let schedule_count: i64 = tx
+        .query_row("SELECT COUNT(*) FROM scheduled_classes_temp", [], |r| {
+            r.get(0)
+        })
+        .unwrap_or(0);
+    if schedule_count > 0 {
+        changes_summary.insert("schedules_count".to_string(), json!(schedule_count));
+    }
+
     let mut stmt = tx
         .prepare("SELECT id, name FROM teachers_temp WHERE id NOT IN (SELECT id FROM teachers)")
         .map_err(|e| e.to_string())?;
@@ -516,8 +552,13 @@ pub async fn commit_data(
             "COMMIT_OPERATION",
             None,
             None,
-            Some(json!("Committed changes")),
+            Some(json!({
+                "target_name": "批量提交",
+                "summary": "提交了临时表中的更改",
+                "details": changes_summary
+            })),
             None,
+            false,
         );
     }
 
@@ -549,21 +590,6 @@ pub async fn clear_temp_data(
     clear_all_temp_tables(&db, user_id.as_deref())?;
     info!("Temp tables cleared successfully");
 
-    // Create audit log for revert operation (Feature: 001-rbac-audit-system - User Story 6)
-    if let Some(uid) = user_id {
-        if let Err(e) = crate::audit::create_audit_log_entry(
-            &db,
-            &uid,
-            "REVERT_OPERATION",
-            None,
-            None,
-            Some(json!("Reverted all uncommitted changes from temp tables")),
-            None,
-        ) {
-            warn!("Failed to create audit log for revert: {}", e);
-        }
-    }
-
     Ok(())
 }
 
@@ -573,7 +599,7 @@ pub async fn clear_temp_data(
 
 /// Load AllData from database, prioritizing temp tables
 /// Public function for use by import_export module
-pub fn load_all_data_from_connection(conn: &Connection, use_temp: bool) -> CommandResult<AllData> {
+pub fn load_all_data_from_connection(conn: &Connection, use_temp: bool, include_auth: bool) -> CommandResult<AllData> {
     Ok(AllData {
         time: load_time_slots(conn, use_temp)?,
         day: load_days(conn, use_temp)?,
@@ -586,8 +612,8 @@ pub fn load_all_data_from_connection(conn: &Connection, use_temp: bool) -> Comma
         scheduled_classes: load_scheduled_classes(conn, use_temp)?,
         teacher_unavailability: load_teacher_unavailability(conn, use_temp)?,
         schedule_density: load_schedule_density(conn, use_temp)?,
-        roles: load_roles(conn)?,
-        users: load_users(conn)?,
+        roles: if include_auth { load_roles(conn)? } else { Vec::new() },
+        users: if include_auth { load_users(conn)? } else { Vec::new() },
     })
 }
 
@@ -608,7 +634,7 @@ fn load_all_data(conn: &Connection) -> CommandResult<AllData> {
 
     let use_temp = has_temp_data;
 
-    load_all_data_from_connection(conn, use_temp)
+    load_all_data_from_connection(conn, use_temp, true)
 }
 
 fn load_time_slots(conn: &Connection, use_temp: bool) -> CommandResult<Vec<TimeSlot>> {
@@ -1242,6 +1268,12 @@ fn commit_temp_to_main(tx: &Transaction) -> CommandResult<()> {
             .map_err(|e| e.to_string())?;
     }
 
+    tx.execute("INSERT INTO audit_logs SELECT * FROM audit_logs_temp", [])
+        .map_err(|e| format!("Failed to commit audit logs: {}", e))?;
+
+    tx.execute("DELETE FROM audit_logs_temp", [])
+        .map_err(|e| e.to_string())?;
+
     truncate_all_temp_tables(tx)?;
 
     info!("Commit completed successfully");
@@ -1291,6 +1323,7 @@ fn clear_all_temp_tables(conn: &Connection, user_id: Option<&str>) -> CommandRes
         "campuses_temp",
         "days_temp",
         "time_slots_temp",
+        "audit_logs_temp",
     ];
 
     for table in &temp_tables {
@@ -1300,14 +1333,20 @@ fn clear_all_temp_tables(conn: &Connection, user_id: Option<&str>) -> CommandRes
 
     // Create audit log for revert operation (Feature: 001-rbac-audit-system - User Story 6)
     if let Some(uid) = user_id {
+        let details = json!({
+            "target_name": "批量撤销",
+            "action": "撤销更改",
+            "description": "已清空临时表，还原至上次提交状态"
+        });
         if let Err(e) = crate::audit::create_audit_log_entry(
             conn,
             uid,
             "REVERT_OPERATION",
             None,
             None,
-            Some(json!("Reverted all uncommitted changes from temp tables")),
+            Some(details),
             None,
+            false,
         ) {
             warn!("Failed to create audit log for revert: {}", e);
         }
@@ -1401,6 +1440,21 @@ pub fn create_user(
         }
     }
 
+    let role_name: String = conn
+        .query_row("SELECT name FROM roles WHERE id = ?1", [role_id], |row| {
+            row.get(0)
+        })
+        .unwrap_or("Unknown".to_string());
+
+    let teacher_name: Option<String> = if let Some(tid) = teacher_id {
+        conn.query_row("SELECT name FROM teachers WHERE id = ?1", [tid], |row| {
+            row.get(0)
+        })
+        .ok()
+    } else {
+        None
+    };
+
     let user_id = Uuid::new_v4().to_string();
     let created_at = Local::now().to_rfc3339();
 
@@ -1418,18 +1472,29 @@ pub fn create_user(
     )
     .map_err(|e| format!("Failed to insert user: {}", e))?;
 
-    // Create audit log
+    let mut details = json!({
+        "target_name": username,
+        "action": "创建用户",
+        "username": username,
+        "role_name": role_name
+    });
+
+    if let Some(tn) = teacher_name {
+        details
+            .as_object_mut()
+            .unwrap()
+            .insert("teacher_name".to_string(), json!(tn));
+    }
+
     if let Err(e) = crate::audit::create_audit_log_entry(
         conn,
         creator_user_id,
         "USER_CREATED",
         Some("users"),
         Some(&user_id),
-        Some(json!({
-            "username": username,
-            "role_id": role_id
-        })),
+        Some(details),
         None,
+        false,
     ) {
         warn!("Failed to create audit log for user creation: {}", e);
     }
@@ -1437,7 +1502,6 @@ pub fn create_user(
     Ok(user_id)
 }
 
-/// Update user (Feature: 001-rbac-audit-system - User Story 4)
 pub fn update_user(
     conn: &Connection,
     user_id: &str,
@@ -1445,37 +1509,49 @@ pub fn update_user(
     new_teacher_id: Option<&str>,
     current_user_id: &str,
 ) -> Result<(), String> {
-    // Prevent user from changing their own role
     if user_id == current_user_id {
         return Err("Cannot change your own role".to_string());
     }
 
-    // Validate new role exists
-    let role_exists: bool = conn
+    let new_role_name: String = conn
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM roles WHERE id = ?1)",
+            "SELECT name FROM roles WHERE id = ?1",
             [new_role_id],
             |row| row.get(0),
         )
-        .map_err(|e| format!("Failed to validate role: {}", e))?;
+        .map_err(|_| "Role not found".to_string())?;
 
-    if !role_exists {
-        return Err("Role not found".to_string());
-    }
+    let new_teacher_name: String = if let Some(tid) = new_teacher_id {
+        conn.query_row("SELECT name FROM teachers WHERE id = ?1", [tid], |row| {
+            row.get(0)
+        })
+        .map_err(|_| "Teacher not found".to_string())?
+    } else {
+        "无".to_string()
+    };
 
-    let (old_user_raw, target_username): (String, String) = conn
+    let (target_username, old_role_name, old_teacher_name): (String, String, Option<String>) = conn
         .query_row(
-            "SELECT json_object('role_id', role_id, 'teacher_id', teacher_id), username 
-         FROM users WHERE id = ?1",
+            "SELECT 
+                u.username, 
+                r.name as role_name, 
+                t.name as teacher_name
+             FROM users u
+             LEFT JOIN roles r ON u.role_id = r.id
+             LEFT JOIN teachers t ON u.teacher_id = t.id
+             WHERE u.id = ?1",
             [user_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
-        .map_err(|e| e.to_string())?;
-    let old_val: Value = serde_json::from_str(&old_user_raw).unwrap();
+        .map_err(|_| "User not found".to_string())?;
+    let old_val = json!({
+        "role_name": old_role_name,
+        "teacher_name": old_teacher_name.unwrap_or("无".to_string())
+    });
 
     let new_val = json!({
-        "role_id": new_role_id,
-        "teacher_id": new_teacher_id
+        "role_name": new_role_name,
+        "teacher_name": new_teacher_name
     });
 
     let changes = crate::audit::compute_diff(&old_val, &new_val);
@@ -1488,7 +1564,7 @@ pub fn update_user(
 
     if !changes.as_array().unwrap().is_empty() {
         let rich_details = json!({
-            "target_username": target_username,
+            "target_name": target_username,
             "changes": changes
         });
 
@@ -1500,31 +1576,26 @@ pub fn update_user(
             Some(user_id),
             Some(rich_details),
             None,
+            false,
         );
     }
 
     Ok(())
 }
 
-/// Reset user password (Feature: 001-rbac-audit-system - User Story 4)
 pub fn reset_password(
     conn: &Connection,
     user_id: &str,
     new_password_hash: &str,
     admin_user_id: &str,
 ) -> Result<(), String> {
-    // Check if user exists
-    let user_exists: bool = conn
+    let target_username: String = conn
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1)",
+            "SELECT username FROM users WHERE id = ?1",
             [user_id],
             |row| row.get(0),
         )
-        .map_err(|e| format!("Failed to check user existence: {}", e))?;
-
-    if !user_exists {
-        return Err("User not found".to_string());
-    }
+        .map_err(|_| "User not found".to_string())?;
 
     conn.execute(
         "UPDATE users SET password_hash = ?2 WHERE id = ?1",
@@ -1533,29 +1604,34 @@ pub fn reset_password(
     .map_err(|e| format!("Failed to reset password: {}", e))?;
 
     // Create audit log
-    if let Err(e) = crate::audit::create_audit_log_entry(
+    let _ = crate::audit::create_audit_log_entry(
         conn,
         admin_user_id,
         "PASSWORD_RESET",
         Some("users"),
         Some(user_id),
+        Some(serde_json::json!({"target_name": target_username})),
         None,
-        None,
-    ) {
-        warn!("Failed to create audit log for password reset: {}", e);
-    }
+        false,
+    );
 
     Ok(())
 }
 
 /// Delete user account (Feature: 001-rbac-audit-system - User Story 4)
 pub fn delete_user(conn: &Connection, user_id: &str, current_user_id: &str) -> Result<(), String> {
-    // Prevent user from deleting their own account
+    let target_username: String = conn
+        .query_row(
+            "SELECT username FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| "User not found")?;
+
     if user_id == current_user_id {
         return Err("Cannot delete your own account".to_string());
     }
 
-    // Check user exists and get role_id
     let role_id: String = conn
         .query_row(
             "SELECT role_id FROM users WHERE id = ?1",
@@ -1564,10 +1640,8 @@ pub fn delete_user(conn: &Connection, user_id: &str, current_user_id: &str) -> R
         )
         .map_err(|_| "User not found")?;
 
-    // Get the Scheduler role ID
     let scheduler_role_id = "00000000-0000-0000-0000-000000000001";
 
-    // If deleting a Scheduler, check if it's the last one
     if role_id == scheduler_role_id {
         let count: i64 = conn
             .query_row(
@@ -1585,15 +1659,15 @@ pub fn delete_user(conn: &Connection, user_id: &str, current_user_id: &str) -> R
     conn.execute("DELETE FROM users WHERE id = ?1", [user_id])
         .map_err(|e| format!("Failed to delete user: {}", e))?;
 
-    // Create audit log
     let _ = crate::audit::create_audit_log_entry(
         conn,
         current_user_id,
         "USER_DELETED",
         Some("users"),
         Some(user_id),
+        Some(serde_json::json!({"target_name": target_username})),
         None,
-        None,
+        false,
     );
 
     Ok(())
@@ -1645,6 +1719,7 @@ pub fn change_own_password(
         Some(user_id),
         None,
         None,
+        false,
     ) {
         warn!("Failed to create audit log for password change: {}", e);
     }
@@ -1703,7 +1778,7 @@ pub fn query_audit_logs(
 
     // Count total entries
     let count_sql = format!(
-        "SELECT COUNT(*) FROM audit_logs al JOIN users u ON al.user_id = u.id {}",
+        "SELECT COUNT(*) FROM audit_logs al LEFT JOIN users u ON al.user_id = u.id {}",
         where_sql
     );
 
@@ -1722,10 +1797,10 @@ pub fn query_audit_logs(
 
     // Query entries with pagination
     let query_sql = format!(
-        "SELECT al.id, al.user_id, u.username, al.action_type, al.target_table, \
+        "SELECT al.id, al.user_id, COALESCE(u.username, '已删除用户'), al.action_type, al.target_table, \
          al.target_id, al.timestamp, al.change_details, al.ip_address \
          FROM audit_logs al \
-         JOIN users u ON al.user_id = u.id \
+         LEFT JOIN users u ON al.user_id = u.id \
          {} \
          ORDER BY al.timestamp DESC \
          LIMIT ? OFFSET ?",

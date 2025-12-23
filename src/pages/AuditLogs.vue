@@ -27,22 +27,28 @@
             <n-data-table :columns="columns" :data="auditLogs" :pagination="paginationConfig" :loading="loading"
                 :row-key="row => row.id" :remote="true" :bordered="true" />
         </n-layout-content>
+
+        <n-modal v-model:show="showDetailModal" preset="card" title="提交详情" style="width: 600px; max-width: 90vw;">
+            <n-scrollbar style="max-height: 60vh;">
+                <pre class="json-viewer">{{ currentDetailJson }}</pre>
+            </n-scrollbar>
+        </n-modal>
     </n-layout>
 </template>
 
 <script setup>
-import { ref, computed, h, onMounted } from 'vue';
+import { ref, computed, h, onMounted, onUnmounted } from 'vue';
 import {
     NLayout, NLayoutHeader, NLayoutContent, NCard, NFlex, NFormItem, NInput, NSelect,
-    NDatePicker, NButton, NDataTable, NText, NH2, NTag, useMessage
+    NDatePicker, NButton, NDataTable, NText, NH2, NTag, NModal, NScrollbar, useMessage, NIcon
 } from 'naive-ui';
+import { DocumentTextOutline, ArrowForwardOutline } from '@vicons/ionicons5';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useAuthStore } from '../stores/auth';
-import { useDataStore } from '../stores/data';
 
 const authStore = useAuthStore();
 const message = useMessage();
-const dataStore = useDataStore();
 
 const auditLogs = ref([]);
 const loading = ref(false);
@@ -51,19 +57,23 @@ const perPage = ref(10);
 const totalEntries = ref(0);
 const totalPages = ref(0);
 
-// Filters
+const listeners = [];
+
 const filterUsername = ref('');
 const filterActionType = ref(null);
 const filterDateRange = ref(null);
 
+const showDetailModal = ref(false);
+const currentDetailJson = ref('');
+
 // Action type options (matching backend enum)
 const actionTypeOptions = [
-    { label: '登录', value: 'LOGIN' },
-    { label: '登出', value: 'LOGOUT' },
+    { label: '用户登录', value: 'LOGIN' },
+    { label: '用户登出', value: 'LOGOUT' },
     { label: '登录失败', value: 'LOGIN_FAILED' },
     { label: '创建用户', value: 'USER_CREATED' },
     { label: '自动创建用户', value: 'AUTO_USER_CREATED' },
-    { label: '角色变更', value: 'USER_UPDATED' },
+    { label: '用户更新', value: 'USER_UPDATED' },
     { label: '密码重置', value: 'PASSWORD_RESET' },
     { label: '修改密码', value: 'PASSWORD_CHANGED' },
     { label: '删除用户', value: 'USER_DELETED' },
@@ -79,6 +89,14 @@ const actionTypeOptions = [
     { label: '创建课程', value: 'COURSE_CREATED' },
     { label: '更新课程', value: 'COURSE_UPDATED' },
     { label: '删除课程', value: 'COURSE_DELETED' },
+    { label: '新增场地', value: 'VENUE_CREATED' },
+    { label: '更新场地', value: 'VENUE_UPDATED' },
+    { label: '删除场地', value: 'VENUE_DELETED' },
+    { label: '新增校区', value: 'CAMPUS_CREATED' },
+    { label: '更新校区', value: 'CAMPUS_UPDATED' },
+    { label: '删除校区', value: 'CAMPUS_DELETED' },
+    { label: '时间段变更', value: 'TIME_SLOT_MODIFIED' },
+    { label: '工作日变更', value: 'DAY_MODIFIED' },
 ];
 
 // Table columns
@@ -117,142 +135,160 @@ const columns = [
             let type = 'default';
             if (row.action_type.includes('LOGIN')) type = 'success';
             else if (row.action_type.includes('DELETE')) type = 'error';
-            else if (row.action_type.includes('CREATE')) type = 'info';
-            else if (row.action_type.includes('UPDATE') || row.action_type.includes('CHANGED')) type = 'warning';
+            else if (row.action_type.includes('CREATE') || row.action_type.includes('ADD')) type = 'info';
+            else if (row.action_type.includes('UPDATE') || row.action_type.includes('CHANGED') || row.action_type.includes('MODIFIED')) type = 'warning';
+            else if (row.action_type === 'COMMIT_OPERATION') type = 'primary';
 
             return h(NTag, { type }, { default: () => label });
         }
     },
     {
-        title: '目标表',
-        key: 'target_table',
-        width: 120,
-        render: (row) => row.target_table || '-'
-    },
-    {
         title: '详细信息',
         key: 'change_details',
         render: (row) => {
-            if (!row.change_details) return h(NText, { depth: 3 }, { default: () => '无详情' });
+            if (row.action_type === 'COMMIT_OPERATION') {
+                return h(NButton, {
+                    size: 'small',
+                    secondary: true,
+                    type: 'info',
+                    onClick: () => openDetailModal(row.change_details)
+                }, {
+                    icon: () => h(NIcon, { component: DocumentTextOutline }),
+                    default: () => '查看提交详情'
+                });
+            }
+
+            if (!row.change_details) return h(NText, { depth: 3 }, { default: () => '-' });
 
             try {
-                const rawDetails = JSON.parse(row.change_details);
+                const raw = JSON.parse(row.change_details);
+                const list = [];
 
-                let changes = [];
-                let contextInfo = null;
+                let targetName = raw.target_name || raw.username || raw.file_path || '未知目标';
+                if (typeof targetName === 'object' && targetName !== null) {
+                    targetName = JSON.stringify(targetName);
+                }
 
-                if (Array.isArray(rawDetails)) {
-                    changes = rawDetails;
-                } else if (typeof rawDetails === 'object') {
-                    changes = rawDetails.changes || [];
-                    if (rawDetails.target_username) {
-                        contextInfo = rawDetails.target_username;
-                    } else if (rawDetails.teacher_name) {
-                        contextInfo = rawDetails.teacher_name;
-                    } else if (rawDetails.username) {
-                        contextInfo = rawDetails.username;
+                list.push(h(NFlex, { align: 'center', size: 6, style: 'margin-bottom: 6px;' }, {
+                    default: () => [
+                        h(NTag, { size: 'small', type: 'primary', bordered: false }, { default: () => '目标' }),
+                        h(NText, { strong: true }, { default: () => targetName })
+                    ]
+                }));
+
+                const contentNodes = [];
+
+                if (raw.changes && Array.isArray(raw.changes)) {
+                    raw.changes.forEach(change => {
+                        const oldVal = (typeof change.old === 'object' && change.old !== null) ? JSON.stringify(change.old) : String(change.old ?? '');
+                        const newVal = (typeof change.new === 'object' && change.new !== null) ? JSON.stringify(change.new) : String(change.new ?? '');
+                        contentNodes.push(h('div', { style: 'display: flex; align-items: center; gap: 4px;' }, [
+                            h(NText, { depth: 3 }, { default: () => `${change.label || translateField(change.field)}: ` }),
+                            h(NText, { delete: true, depth: 3 }, { default: () => oldVal.length === 0 ? '无' : oldVal }),
+                            h(NIcon, { size: 12 }, { default: () => h(ArrowForwardOutline) }),
+                            h(NText, { type: 'success' }, { default: () => newVal.length === 0 ? '无' : newVal })
+                        ]));
+                    });
+                }
+
+                const ignoreKeys = ['target_name', 'changes', 'id', 'user_id', 'diff'];
+                Object.keys(raw).forEach(key => {
+                    if (ignoreKeys.includes(key)) return;
+
+                    const label = translateField(key);
+                    const value = raw[key];
+
+                    let displayValue = String(value);
+                    if (typeof value === 'object' && value !== null) {
+                        displayValue = JSON.stringify(value);
                     }
+
+                    if (key === 'action') {
+                        contentNodes.unshift(h('div', [
+                            h(NText, { strong: true }, { default: () => displayValue })
+                        ]));
+                    } else {
+                        contentNodes.push(h('div', [
+                            h(NText, { depth: 3 }, { default: () => `${label}: ` }),
+                            h(NText, null, { default: () => displayValue })
+                        ]));
+                    }
+                });
+
+                if (contentNodes.length > 0) {
+                    list.push(h(NFlex, { align: 'start', size: 6 }, {
+                        default: () => [
+                            h(NTag, { size: 'small', type: 'default', bordered: false }, { default: () => '内容' }),
+                            h('div', { style: 'font-size: 13px; line-height: 1.6;' }, contentNodes)
+                        ]
+                    }));
                 }
 
-                const renderList = [];
-
-                if (contextInfo) {
-                    renderList.push(
-                        h(NFlex, { align: 'center', size: 4, style: 'margin-bottom: 6px; gap: 8px' }, {
-                            default: () => [
-                                h(NTag, { size: 'tiny', bordered: false }, { default: () => '操作对象' }),
-                                h(NText, { strong: true }, { default: () => contextInfo })
-                            ]
-                        })
-                    );
-                }
-
-                if (Array.isArray(changes) && changes.length > 0) {
-                    const changesNodes = changes.map(item => h('div', {
-                        style: 'font-size: 12px; display: flex; align-items: center; gap: 8px;'
-                    }, [
-                        h(NTag, { size: 'tiny', bordered: false, type: 'info' }, {
-                            default: () => translateField(item.field)
-                        }),
-                        h(NText, { delete: true, depth: 3 }, {
-                            default: () => translateValue(item.field, item.old)
-                        }),
-                        h(NText, { strong: true, depth: 2 }, { default: () => '→' }),
-                        h(NText, { type: 'success', strong: true }, {
-                            default: () => translateValue(item.field, item.new)
-                        })
-                    ]));
-
-                    renderList.push(h(NFlex, { vertical: true, size: 4 }, { default: () => changesNodes }));
-                } else if (!contextInfo) {
-                    return h('pre', { style: 'font-size: 10px; margin: 0; white-space: pre-wrap;' }, JSON.stringify(rawDetails, null, 2));
-                }
-
-                return h('div', null, renderList);
-
+                return h('div', { style: 'padding: 4px 0;' }, list);
             } catch (e) {
                 console.warn('JSON parse error', e);
-                return row.change_details;
+                return h(NText, { depth: 3 }, { default: () => row.change_details });
             }
         }
     }
 ];
 
-const translateValue = (field, value) => {
-    if (value === null || value === undefined || value === '' || value === 'null') {
-        return '无';
-    }
-
-    let result = String(value);
-
+const openDetailModal = (details) => {
     try {
-        switch (field) {
-            case 'role_id':
-                const role = dataStore.roles.find(r => r.id === value);
-                result = role ? role.name : value;
-                break;
-            case 'teacher_id':
-                const teacher = dataStore.teachers.find(t => t.id === value);
-                result = teacher ? teacher.name : value;
-                break;
-            case 'campus_id':
-                const campus = dataStore.campuses.find(c => c.id === value);
-                result = campus ? campus.name : value;
-                break;
-            case 'venue_id':
-                const venue = dataStore.venues.find(v => v.id === value);
-                result = venue ? venue.name : value;
-                break;
-            case 'is_only_shahe':
-                result = (value === true || value === 1 || value === 'true') ? '仅沙河' : '全校区';
-                break;
-        }
+        const obj = typeof details === 'string' ? JSON.parse(details) : details;
+        currentDetailJson.value = JSON.stringify(obj, null, 2);
+        showDetailModal.value = true;
     } catch (e) {
-        console.warn('Translation error:', e);
+        currentDetailJson.value = String(details);
+        showDetailModal.value = true;
     }
-
-    return String(result);
 };
 
 const translateField = (field) => {
     const dict = {
+        'role': '权限角色',
         'role_id': '权限角色',
-        'teacher_id': '关联教师',
+        'role_name': '角色',
+        'teacher_id': '关联教师ID',
+        'teacher_name': '关联教师',
         'name': '名称',
+        'value': '内容',
         'max_teaching_hours': '最大学时',
-        'is_only_shahe': '校区限制',
+        'is_only_shahe': '仅沙河校区',
         'venue_id': '场地',
-        'campus_id': '校区'
+        'campus_id': '校区',
+        'capacity': '容量',
+        'corresponding_hours': '对应学时',
+        'teaches_count': '关联课程数',
+        'venue_count': '关联场地数',
+        'username': '用户名',
+        'action': '动作',
+        'reason': '原因',
+        'description': '描述',
+        'course_id': '课程',
+        'course_name': '课程',
+        'day_id': '日期',
+        'time_id': '时段',
+        'old_data': '原数据',
+        'target_name': '目标',
+        'file_path': '文件路径',
+        'teachers_count': '教师数',
+        'courses_count': '课程数',
+        'schedules_count': '排课数',
+        'summary': '摘要',
+        'details': '详情',
+        'status': '状态',
+        'message': '消息',
+        'time_slot_name': '时间段',
+        'location_name': '地点'
     };
     return dict[field] || field;
 };
 
-// Pagination config
 const paginationConfig = computed(() => ({
     page: currentPage.value,
     pageSize: perPage.value,
     itemCount: totalEntries.value,
-    // pageCount: totalPages.value,
     showSizePicker: true,
     pageSizes: [10, 20, 50],
     onUpdatePage: (page) => {
@@ -275,11 +311,9 @@ const formatLocalDate = (timestamp) => {
     return `${year}-${month}-${day}`;
 };
 
-// Load audit logs from backend
 const loadAuditLogs = async () => {
     loading.value = true;
     try {
-        // Build filters object
         const filters = {};
 
         if (filterUsername.value) {
@@ -315,16 +349,32 @@ const loadAuditLogs = async () => {
     }
 };
 
-const handleFilterChange = () => {
-    // Reset to first page when filters change
-    currentPage.value = 1;
-};
-
-onMounted(() => {
+onMounted(async () => {
     loadAuditLogs();
+    listeners.push(await listen('commit-completed', () => {
+        loadAuditLogs();
+    }));
+
+    listeners.push(await listen('data-reloaded', () => {
+        loadAuditLogs();
+    }));
+});
+
+onUnmounted(() => {
+    listeners.forEach(unlisten => unlisten());
+    listeners.length = 0;
 });
 </script>
 
 <style scoped>
-/* Add any custom styles here */
+.json-viewer {
+    background-color: #f5f5f5;
+    padding: 12px;
+    border-radius: 4px;
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-size: 12px;
+    color: #333;
+}
 </style>

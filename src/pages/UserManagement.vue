@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, onMounted, h, reactive } from 'vue';
+import { ref, computed, onMounted, onUnmounted, h, reactive, watch } from 'vue';
 import { useAuthStore } from '../stores/auth';
 import { useDataStore } from '../stores/data';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
     NSpace, NFlex, NH2, NButton, NDataTable, NIcon, NModal, NForm, NFormItem,
     NInput, NSelect, NTag, useMessage, useDialog
@@ -21,6 +22,8 @@ const authStore = useAuthStore();
 const dataStore = useDataStore();
 const message = useMessage();
 const dialog = useDialog();
+
+const listeners = [];
 
 const pagination = reactive({
     page: 1,
@@ -319,9 +322,21 @@ const columns = computed(() => [
     }
 ]);
 
-onMounted(() => {
-    loadUsers();
-    loadCommittedTeachers();
+onMounted(async () => {
+    const refreshData = () => {
+        loadUsers();
+        loadCommittedTeachers();
+    };
+
+    refreshData();
+
+    listeners.push(await listen('commit-completed', refreshData));
+    listeners.push(await listen('data-reloaded', refreshData));
+});
+
+onUnmounted(() => {
+    listeners.forEach(unlisten => unlisten());
+    listeners.length = 0;
 });
 
 watch(showCreateModal, (val) => {

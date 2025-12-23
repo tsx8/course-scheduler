@@ -228,6 +228,18 @@ CREATE TABLE IF NOT EXISTS schedule_density_temp (
     FOREIGN KEY (time_id) REFERENCES time_slots_temp(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS audit_logs_temp (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    target_table TEXT,
+    target_id TEXT,
+    timestamp TEXT NOT NULL,
+    change_details TEXT,
+    ip_address TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- ============================================================================
 -- PERFORMANCE INDEXES
 -- ============================================================================
@@ -265,3 +277,4 @@ CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_logs(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action_type);
 CREATE INDEX IF NOT EXISTS idx_audit_table ON audit_logs(target_table);
+CREATE INDEX IF NOT EXISTS idx_audit_temp_user ON audit_logs_temp(user_id);

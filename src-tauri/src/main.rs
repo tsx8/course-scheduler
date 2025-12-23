@@ -230,6 +230,7 @@ async fn record_audit_log(
         target_id.as_deref(),
         change_details,
         None,
+        true,
     )
 }
 
@@ -276,27 +277,36 @@ async fn authenticate_user(
                         id: user_id.clone(),
                         username: username.clone(),
                         password_hash: None,
-                        role_id: role_id.clone(), // 修改 3: 正确赋值 role_id
+                        role_id: role_id.clone(),
                         teacher_id: teacher_id.clone(),
                         created_at: String::new(),
                         last_login: None,
                     };
 
-                    // Store session
                     {
                         let mut sessions_guard = sessions.lock().unwrap();
                         sessions_guard.insert(session_id.clone(), user.clone());
                     }
 
-                    // Update last_login timestamp
                     let now = Local::now().to_rfc3339();
                     let _ = db.execute(
                         "UPDATE users SET last_login = ?1 WHERE id = ?2",
                         params![&now, &user_id],
                     );
 
-                    // Create audit log entry
-                    let _ = create_audit_log_entry(&db, &user_id, "LOGIN", None, None, None, None);
+                    let _ = create_audit_log_entry(
+                        &db,
+                        &user_id,
+                        "LOGIN",
+                        None,
+                        None,
+                        Some(serde_json::json!({
+                            "target_name": username,
+                            "role": role_name
+                        })),
+                        None,
+                        false,
+                    );
 
                     info!("User {} authenticated successfully", username);
 
@@ -313,6 +323,18 @@ async fn authenticate_user(
                 }
                 Ok(false) => {
                     warn!("Invalid password for user: {}", username);
+                    let _ = create_audit_log_entry(
+                        &db,
+                        "00000000-0000-0000-0000-000000000000",
+                        "LOGIN_FAILED",
+                        None,
+                        None,
+                        Some(
+                            serde_json::json!({"username": username, "reason": "Password incorrect"}),
+                        ),
+                        None,
+                        false,
+                    );
                     Err("Invalid username or password".to_string())
                 }
                 Err(e) => {
@@ -323,12 +345,21 @@ async fn authenticate_user(
         }
         Err(_) => {
             warn!("User not found: {}", username);
+            let _ = create_audit_log_entry(
+                &db,
+                "00000000-0000-0000-0000-000000000000",
+                "LOGIN_FAILED",
+                None,
+                None,
+                Some(serde_json::json!({"username": username, "reason": "User not found"})),
+                None,
+                false,
+            );
             Err("Invalid username or password".to_string())
         }
     }
 }
 
-/// Logout user and destroy session
 #[command]
 async fn logout_user(
     session_id: String,
@@ -340,18 +371,29 @@ async fn logout_user(
     info!("Logout attempt for session: {}", session_id);
 
     // Get user before removing session (for audit log)
-    let user_id = {
+    let user_info = {
         let sessions_guard = sessions.lock().unwrap();
-        sessions_guard.get(&session_id).map(|u| u.id.clone())
+        sessions_guard
+            .get(&session_id)
+            .map(|u| (u.id.clone(), u.username.clone()))
     };
 
-    if let Some(uid) = user_id {
-        // Create audit log entry
+    if let Some((uid, username)) = user_info {
         let db = state.db.lock().unwrap();
-        let _ = create_audit_log_entry(&db, &uid, "LOGOUT", None, None, None, None);
+        let _ = create_audit_log_entry(
+            &db,
+            &uid,
+            "LOGOUT",
+            None,
+            None,
+            Some(serde_json::json!({
+                "target_name": username
+            })),
+            None,
+            false,
+        );
     }
 
-    // Remove session
     let mut sessions_guard = sessions.lock().unwrap();
     sessions_guard.remove(&session_id);
 
@@ -818,6 +860,7 @@ async fn run_solver(
                 "message": "自动排课完成"
             })),
             None,
+            true,
         );
     }
 
@@ -874,22 +917,57 @@ async fn finalize_and_close(
     session_id: String,
     sessions: State<'_, SessionStore>,
 ) -> Result<(), String> {
+    let has_changes = {
+        let db = app_state.db.lock().unwrap();
+        check_has_unsaved(&db)
+    };
     if save {
         info!("Finalizing with save (committing data)");
         // Commit temp data to main tables
         db_handler::commit_data(
             app_handle.clone(),
-            app_state,
+            app_state.clone(),
             session_id.clone(),
             sessions.clone(),
         )
         .await?;
         info!("Data committed successfully");
-    } else {
+    } else if has_changes {
         info!("Finalizing without save (reverting changes)");
-        // Clear temp data (revert)
-        db_handler::clear_temp_data(app_state, session_id.clone(), sessions.clone()).await?;
+        db_handler::clear_temp_data(app_state.clone(), session_id.clone(), sessions.clone())
+            .await?;
         info!("Changes reverted successfully");
+    } else {
+        info!("Finalizing without save (no changes to revert)");
+    }
+
+    let user_info = {
+        let sessions_guard = sessions.lock().unwrap();
+        sessions_guard
+            .get(&session_id)
+            .map(|u| (u.id.clone(), u.username.clone()))
+    };
+
+    if let Some((uid, username)) = user_info {
+        let db = app_state.db.lock().unwrap();
+        let _ = crate::audit::create_audit_log_entry(
+            &db,
+            &uid,
+            "LOGOUT",
+            None,
+            None,
+            Some(serde_json::json!({
+                "target_name": username,
+                "reason": "App Closed"
+            })),
+            None,
+            false,
+        );
+
+        drop(db);
+        let mut sessions_guard = sessions.lock().unwrap();
+        sessions_guard.remove(&session_id);
+        info!("Implicit logout performed for user: {}", username);
     }
 
     {
