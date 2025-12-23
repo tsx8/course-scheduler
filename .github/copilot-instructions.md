@@ -182,7 +182,7 @@ See `solver/solver.py` for JSON schema (Strict 3NF Structure):
 - ✅ SQLite migration complete (replaced file-based JSON)
 - ✅ RBAC + Audit system (Feature: 001-rbac-audit-system)
 - ✅ Normalized 3NF database schema
-- ✅ Single-instance enforcement (Windows mutex in `src-tauri/src/single_instance.rs`)
+- ✅ Single-session enforcement (File lock on login via `fs2` replaced process mutex)
 - ✅ Strict 3NF Data Format (Legacy JSON support removed)
 - 🚧 Cross-platform NOT supported (Windows-only by design)
 
@@ -190,8 +190,8 @@ See `solver/solver.py` for JSON schema (Strict 3NF Structure):
 
 ### Session Management Refactoring
 
-- **Current**: Single-instance via Windows process mutex
-- **Target**: Per-account session control via login system
+- **Current**: Session-based locking (file lock prevents concurrent logins)
+- **Target**: Advanced per-account session control
 - **Benefits**: Support multiple concurrent users, better scalability
 
 ### Export Functionality
