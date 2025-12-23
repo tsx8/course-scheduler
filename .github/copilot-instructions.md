@@ -126,25 +126,26 @@ const result = await invoke('command_name', { param: value });
 ## Integration Points
 
 ### Solver Input/Output Format
-See `solver/solver.py` for JSON schema:
+See `solver/solver.py` for JSON schema (Strict 3NF Structure):
 ```json
 {
   "time": [{"id": "uuid", "value": "周一1-2节", "corresponding_hours": 2}],
-  "day": [...],
-  "courses": [...],
-  "teachers": [{
-    "courses": ["course_id_1"],
-    "hours_limit": 10,
-    "unavailability": [{"day_id": "...", "time_id": "..."}]
-  }],
-  "campuses": [{
-    "venues": [...],
-    "schedule_density": [{"day_id": "...", "time_id": "...", "count": 3}]
-  }]
+  "day": [{"id": "uuid", "value": "周一"}],
+  "campuses": [{"id": "uuid", "name": "沙河校区"}],
+  "venues": [{"id": "uuid", "campus_id": "...", "name": "..."}],
+  "courses": [{"id": "uuid", "name": "..."}],
+  "teachers": [{"id": "uuid", "name": "...", "max_teaching_hours": 10}],
+  "course_venues": [{"course_id": "...", "venue_id": "..."}],
+  "teacher_courses": [{"teacher_id": "...", "course_id": "..."}],
+  "teacher_unavailability": [{"teacher_id": "...", "day_id": "...", "time_id": "..."}],
+  "scheduled_classes": [
+    {"id": "...", "teacher_id": "...", "course_id": "...", "venue_id": "...", "day_id": "...", "time_id": "..."}
+  ],
+  "schedule_density": [{"campus_id": "...", "day_id": "...", "time_id": "...", "count": 3}]
 }
 ```
 
-**Output**: Array of `{teacher_id, course_id, venue_id, day_id, time_id, class_id}` written to temp tables
+**Output**: Array of `scheduled_classes` entries written to temp tables.
 
 ### File Locations (Windows)
 - Database: `%APPDATA%\Roaming\com.tsxb.course-scheduler\course_scheduler.db`
@@ -182,22 +183,19 @@ See `solver/solver.py` for JSON schema:
 - ✅ RBAC + Audit system (Feature: 001-rbac-audit-system)
 - ✅ Normalized 3NF database schema
 - ✅ Single-instance enforcement (Windows mutex in `src-tauri/src/single_instance.rs`)
-- ⚠️ Legacy JSON import compatibility (to be deprecated)
+- ✅ Strict 3NF Data Format (Legacy JSON support removed)
 - 🚧 Cross-platform NOT supported (Windows-only by design)
 
 ## Planned Improvements
 
 ### Session Management Refactoring
+
 - **Current**: Single-instance via Windows process mutex
 - **Target**: Per-account session control via login system
 - **Benefits**: Support multiple concurrent users, better scalability
 
-### Data Format Unification
-- **Action**: Remove legacy JSON compatibility layer in `src-tauri/src/import_export.rs`
-- **Rationale**: Simplify codebase, enforce normalized schema
-- **Migration**: One-time migration already handles old data
-
 ### Export Functionality
+
 - **Selective export**: Allow filtering data before export
 - **Format expansion**: Add CSV/Excel output alongside SQLite/JSON`
 - **User experience**: Progress indicators for large exports

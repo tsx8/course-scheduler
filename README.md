@@ -231,7 +231,6 @@ course-scheduler/
 **Windows 数据位置**:
 - 数据库文件: `%APPDATA%\com.tsxb.course-scheduler\course_scheduler.db`
 - 日志文件: `%APPDATA%\com.tsxb.course-scheduler\logs\course-scheduler-YYYY.MM.DD.log`
-- 旧版 JSON: 首次启动自动迁移到 SQLite，备份为 `data.json.backup-YYYYMMDD-HHMMSS`
 
 **备份建议**: 定期复制 `course_scheduler.db` 文件到安全位置
 
@@ -366,7 +365,7 @@ JOIN teachers t ON sc.teacher_id = t.id;
 ### 导入导出功能
 
 支持多种格式的数据导入导出，所有导入操作写入**临时表**:
-- 📥 **JSON 导入**: 解析 `AllData` JSON → 写入临时表 → 用户预览 → 提交
+- 📥 **JSON 导入**: 解析 `AllData` (3NF结构) → 写入临时表 → 用户预览 → 提交
 - 📥 **数据库导入**: 打开外部 `.db` 文件 → 验证 schema → 复制到临时表
 - 📤 **JSON 导出**: 查询当前状态 → 序列化为 `AllData` JSON → 写入文件
 - 📤 **数据库导出**: 复制整个 `.db` 文件（包含主表和临时表）
@@ -387,16 +386,16 @@ JOIN teachers t ON sc.teacher_id = t.id;
 
 求解器作为独立进程（sidecar）与 Rust 后端通信：
 
-1. **输入**: 用户点击"自动排课" → Rust 序列化当前数据为 JSON → 传递给求解器
+1. **输入**: 用户点击"自动排课" → Rust 序列化当前数据为 JSON (3NF格式) → 传递给求解器
 2. **处理**: Python 求解器运行 CP-SAT 算法（默认 60 秒超时，`solver/solver.py`）
-3. **输出**: 优化后的课程安排（JSON 格式）
+3. **输出**: 优化后的课程安排（JSON 格式，包含 `scheduled_classes` 列表）
 4. **应用**: Rust 解析输出 → 写入临时表 → 前端 Pinia store 自动刷新
 
 **约束模型** (`solver/solver.py`):
-- **DataManager** (8-94 行): 预处理输入，创建 ID 到索引映射
-- **硬约束** (116-208 行): 教师/场地冲突，课时上限，校区规则
-- **软约束** (210-340 行): 最小化单课日、课程间隙、零散工作日，以及排课密度
-- **目标函数** (422 行): 多权重优化，平衡 6 个因素
+- **DataManager**: 预处理扁平化输入数据，建立索引映射
+- **硬约束**: 教师/场地冲突，课时上限，校区规则
+- **软约束**: 最小化单课日、课程间隙、零散工作日，以及排课密度
+- **目标函数**: 多权重优化，平衡 6 个因素
 
 **PyInstaller 打包**: `solver.spec` 手动包含 OR-Tools 二进制文件（`_pywrapcp.pyd`, `.libs`），输出为 `solver-x86_64-pc-windows-msvc.exe`。
 
@@ -492,10 +491,10 @@ npm run tauri build
 - [x] **审计日志基础**: ✅ 操作记录和追踪，支持字段级差异对比
 - [x] **日志系统**: ✅ 日期轮转 + 自动清理
 - [x] **自定义标题栏**: ✅ 无边框窗口 + 自定义最小化/最大化/关闭按钮
+- [x] **数据格式统一**: ✅ 全面移除旧版 JSON 兼容代码，系统完全基于 3NF 架构
 
 下一步计划:
 - [ ] **会话管理优化**: 移除进程锁机制，改由登录系统控制单账户单会话，提升多用户并发能力
-- [ ] **数据格式统一**: 移除旧版 JSON 格式兼容代码，全面采用规范化数据库架构
 - [ ] **导出功能完善**: 优化数据导出流程，支持选择性导出和多格式输出（CSV、Excel）
 - [ ] **冲突检测**: 实时显示排课冲突和约束违反提示
 - [ ] **统计分析**: 课程分布、教师工作量数据可视化
