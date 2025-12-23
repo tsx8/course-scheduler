@@ -128,7 +128,7 @@ pub struct User {
     pub id: String,
     pub username: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub password_hash: Option<String>,  // Skip serializing to frontend
+    pub password_hash: Option<String>, // Skip serializing to frontend
     pub role_id: String,
     pub teacher_id: Option<String>,
     pub created_at: String,
@@ -140,7 +140,7 @@ pub struct User {
 pub struct AuditLogEntry {
     pub id: String,
     pub user_id: String,
-    pub username: String,  // Joined from users table
+    pub username: String, // Joined from users table
     pub action_type: String,
     pub target_table: Option<String>,
     pub target_id: Option<String>,

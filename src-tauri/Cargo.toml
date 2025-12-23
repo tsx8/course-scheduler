@@ -34,6 +34,7 @@ dirs = "5.0"
 chrono = { version = "0.4", features = ["serde"] }
 bcrypt = "0.15"
 uuid = { version = "1.6", features = ["v4", "serde"] }
+fs2 = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Threading"] }

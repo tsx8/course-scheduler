@@ -6,10 +6,10 @@ mod auth;
 mod db_handler;
 mod import_export;
 mod models;
-mod single_instance;
 
 use chrono::Local;
 use db_handler::AppState;
+use fs2::FileExt;
 use models::{AllData, AuditLogFilters, AuditLogsResponse, SessionStore, User};
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
@@ -18,7 +18,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tauri::{command, AppHandle, Emitter, Listener, Manager, State, WindowEvent};
+use tauri::{command, AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::fs as async_fs;
 use tracing::{error, info, warn};
@@ -28,6 +28,10 @@ use uuid::Uuid;
 
 pub struct ShutdownState {
     is_closing_unconditionally: bool,
+}
+
+pub struct SessionLockState {
+    file: Mutex<Option<File>>,
 }
 
 /// Custom writer that reopens log file if it's deleted
@@ -93,6 +97,19 @@ impl Write for ReopenableLogWriter {
             Ok(())
         }
     }
+}
+
+fn get_lock_file_path(app_handle: &AppHandle) -> std::io::Result<PathBuf> {
+    let data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    if !data_dir.exists() {
+        fs::create_dir_all(&data_dir)?;
+    }
+
+    Ok(data_dir.join("session.lock"))
 }
 
 /// Initialize file-based logging system with daily rotation
@@ -238,11 +255,31 @@ async fn record_audit_log(
 async fn authenticate_user(
     username: String,
     password: String,
+    app_handle: AppHandle,
     state: State<'_, AppState>,
     sessions: State<'_, SessionStore>,
+    lock_state: State<'_, SessionLockState>,
 ) -> Result<serde_json::Value, String> {
     use crate::audit::create_audit_log_entry;
     use crate::auth::verify_password;
+
+    let lock_path = get_lock_file_path(&app_handle).map_err(|e| e.to_string())?;
+
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&lock_path)
+        .map_err(|e| format!("无法访问会话锁文件: {}", e))?;
+
+    match file.try_lock_exclusive() {
+        Ok(_) => {
+            // Lock acquired successfully, proceed with auth
+        }
+        Err(_) => {
+            return Err("当前已有其他会话正在运行，系统限制同一时间只能登录一个会话。".to_string());
+        }
+    }
 
     info!("Authentication attempt for user: {}", username);
 
@@ -261,18 +298,31 @@ async fn authenticate_user(
                 row.get(1)?,
                 row.get(2)?,
                 row.get(3)?,
-                row.get(4)?, // role_id
-                row.get(5)?, // teacher_id
+                row.get(4)?,
+                row.get(5)?,
             ))
         },
     );
 
     match result {
         Ok((user_id, username, password_hash, role_name, role_id, teacher_id)) => {
-            // 修改 2: 接收 role_id
             match verify_password(&password, &password_hash) {
                 Ok(true) => {
                     let session_id = Uuid::new_v4().to_string();
+                    let now = Local::now().to_rfc3339();
+                    let mut sessions_guard = sessions.lock().unwrap();
+                    let existing_session_key = sessions_guard
+                        .iter()
+                        .find(|(_, u)| u.username == username)
+                        .map(|(k, _)| k.clone());
+                    if let Some(key) = existing_session_key {
+                        info!(
+                            "User {} logged in from new location, invalidating old session {}",
+                            username, key
+                        );
+                        sessions_guard.remove(&key);
+                    }
+
                     let user = User {
                         id: user_id.clone(),
                         username: username.clone(),
@@ -283,12 +333,11 @@ async fn authenticate_user(
                         last_login: None,
                     };
 
-                    {
-                        let mut sessions_guard = sessions.lock().unwrap();
-                        sessions_guard.insert(session_id.clone(), user.clone());
-                    }
+                    sessions_guard.insert(session_id.clone(), user.clone());
 
-                    let now = Local::now().to_rfc3339();
+                    let mut lock_guard = lock_state.file.lock().unwrap();
+                    *lock_guard = Some(file);
+
                     let _ = db.execute(
                         "UPDATE users SET last_login = ?1 WHERE id = ?2",
                         params![&now, &user_id],
@@ -308,8 +357,6 @@ async fn authenticate_user(
                         false,
                     );
 
-                    info!("User {} authenticated successfully", username);
-
                     Ok(serde_json::json!({
                         "session_id": session_id,
                         "user": {
@@ -322,6 +369,7 @@ async fn authenticate_user(
                     }))
                 }
                 Ok(false) => {
+                    let _ = file;
                     warn!("Invalid password for user: {}", username);
                     let _ = create_audit_log_entry(
                         &db,
@@ -363,8 +411,10 @@ async fn authenticate_user(
 #[command]
 async fn logout_user(
     session_id: String,
+    app_handle: AppHandle,
     state: State<'_, AppState>,
     sessions: State<'_, SessionStore>,
+    lock_state: State<'_, SessionLockState>,
 ) -> Result<bool, String> {
     use crate::audit::create_audit_log_entry;
 
@@ -397,6 +447,15 @@ async fn logout_user(
     let mut sessions_guard = sessions.lock().unwrap();
     sessions_guard.remove(&session_id);
 
+    let mut lock_guard = lock_state.file.lock().unwrap();
+    if let Some(file) = lock_guard.take() {
+        let _ = file.unlock();
+    }
+
+    if let Ok(path) = get_lock_file_path(&app_handle) {
+        let _ = fs::remove_file(path);
+    }
+
     info!("Session {} logged out successfully", session_id);
     Ok(true)
 }
@@ -416,7 +475,6 @@ async fn get_current_user(
 
     match user {
         Some(user) => {
-            // Fetch full user details from database
             let db = state.db.lock().unwrap();
             let result: Result<(String, String, Option<String>, Option<String>), _> = db.query_row(
                 "SELECT u.username, r.name as role, u.teacher_id, u.last_login 
@@ -442,18 +500,12 @@ async fn get_current_user(
     }
 }
 
-// ============================================================================
-// USER MANAGEMENT COMMANDS (Feature: 001-rbac-audit-system - User Story 4)
-// ============================================================================
-
-/// List all users (Scheduler only)
 #[command]
 async fn list_users(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
     let db = state.db.lock().unwrap();
     db_handler::list_users(&db)
 }
 
-/// Create new user manually (Scheduler only)
 #[command]
 async fn create_user(
     username: String,
@@ -501,7 +553,6 @@ async fn update_user(
     state: State<'_, AppState>,
     sessions: State<'_, SessionStore>,
 ) -> Result<(), String> {
-    // Get current user ID from session
     let sessions_lock = sessions
         .lock()
         .map_err(|_| "Failed to lock sessions".to_string())?;
@@ -521,7 +572,6 @@ async fn update_user(
     )
 }
 
-/// Reset user password (Scheduler only)
 #[command]
 async fn reset_password(
     user_id: String,
@@ -550,7 +600,6 @@ async fn reset_password(
     db_handler::reset_password(&db, &user_id, &new_password_hash, &admin_user_id)
 }
 
-/// Delete user account (Scheduler only)
 #[command]
 async fn delete_user(
     user_id: String,
@@ -558,7 +607,6 @@ async fn delete_user(
     state: State<'_, AppState>,
     sessions: State<'_, SessionStore>,
 ) -> Result<(), String> {
-    // Get current user ID from session
     let sessions_lock = sessions
         .lock()
         .map_err(|_| "Failed to lock sessions".to_string())?;
@@ -684,7 +732,6 @@ async fn run_solver(
 ) -> Result<AllData, String> {
     info!("Solver invoked");
 
-    // Get current user ID for audit logging
     let uid = {
         let sessions_lock = sessions
             .lock()
@@ -695,7 +742,6 @@ async fn run_solver(
             .ok_or("Invalid session".to_string())?
     };
 
-    // Load current data from database (temp tables if they exist, else main tables)
     let current_data = db_handler::load_data(app_state.clone()).await?;
     info!(
         "Loaded current data for solver: {} teachers, {} courses",
@@ -703,7 +749,6 @@ async fn run_solver(
         current_data.courses.len()
     );
 
-    // Create temporary JSON file for solver input
     let app_data_dir = app_handle
         .path()
         .app_data_dir()
@@ -711,7 +756,6 @@ async fn run_solver(
     let input_path = app_data_dir.join("solver_input.tmp.json");
     let output_path = app_data_dir.join("solver_output.tmp.json");
 
-    // Write current data to input JSON
     async_fs::write(&input_path, serde_json::to_string(&current_data).unwrap())
         .await
         .map_err(|e| format!("Failed to write solver input: {}", e))?;
@@ -787,8 +831,6 @@ async fn run_solver(
     Ok(solved_data)
 }
 
-/// Check if any of the 11 temp tables contain unsaved data
-/// Returns true if any temp table has at least one row
 fn check_has_unsaved(db: &Connection) -> bool {
     let temp_tables = [
         "scheduled_classes_temp",
@@ -831,6 +873,7 @@ async fn finalize_and_close(
     shutdown_state: State<'_, Arc<Mutex<ShutdownState>>>,
     session_id: String,
     sessions: State<'_, SessionStore>,
+    lock_state: State<'_, SessionLockState>,
 ) -> Result<(), String> {
     let has_changes = {
         let db = app_state.db.lock().unwrap();
@@ -882,6 +925,14 @@ async fn finalize_and_close(
         drop(db);
         let mut sessions_guard = sessions.lock().unwrap();
         sessions_guard.remove(&session_id);
+        let mut lock_guard = lock_state.file.lock().unwrap();
+        if let Some(file) = lock_guard.take() {
+            let _ = file.unlock();
+        }
+        if let Ok(path) = get_lock_file_path(&app_handle) {
+            let _ = fs::remove_file(path);
+        }
+
         info!("Implicit logout performed for user: {}", username);
     }
 
@@ -913,6 +964,9 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .manage(shutdown_state.clone())
+        .manage(SessionLockState {
+            file: Mutex::new(None),
+        })
         .setup(|app| {
             let app_handle = app.handle().clone();
             let data_dir = app_handle
@@ -936,30 +990,6 @@ fn main() {
 
             info!("Application starting");
             info!("App data directory: {}", data_dir.display());
-
-            // Check for stale lockfile first
-            match single_instance::check_stale_lockfile(&data_dir) {
-                Ok(was_cleaned) => {
-                    if was_cleaned {
-                        info!("Stale lockfile was cleaned");
-                    } else {
-                        info!("No stale lockfile found");
-                    }
-                }
-                Err(msg) => {
-                    // Stale lockfile check failed - another instance is actually running
-                    error!("Instance already running: {}", msg);
-                    eprintln!("Error: {}", msg);
-                    std::process::exit(1);
-                }
-            };
-
-            // Create new lockfile for this instance
-            if let Err(msg) = single_instance::check_single_instance(&data_dir) {
-                error!("Failed to create lockfile: {}", msg);
-                eprintln!("Failed to create lockfile: {}", msg);
-                std::process::exit(1);
-            }
 
             // Open or create SQLite database
             let db_path = data_dir.join("course_scheduler.db");
@@ -990,13 +1020,6 @@ fn main() {
             // Initialize session store for authentication
             let sessions: SessionStore = Mutex::new(HashMap::new());
             app.manage(sessions);
-
-            // Register cleanup handler
-            let data_dir_clone = data_dir.clone();
-            app_handle.once("tauri://close-requested", move |_| {
-                info!("Close requested, cleaning up lockfile");
-                single_instance::remove_lock_file(&data_dir_clone);
-            });
 
             // Diagnostic logging for Issue #7 (window creation)
             if let Some(main_window) = app.get_webview_window("main") {
@@ -1042,46 +1065,28 @@ fn main() {
             import_export::export_database,
             import_export::export_json
         ])
-        .on_window_event(move |window, event| {
-            match event {
-                WindowEvent::CloseRequested { api, .. } => {
-                    let sessions = window.state::<SessionStore>();
-                    let has_active_session = {
-                        let sessions_guard = sessions.lock().unwrap();
-                        !sessions_guard.is_empty()
-                    };
-                    let shutdown_state = window.state::<Arc<Mutex<ShutdownState>>>();
-                    let mut is_closing = false;
+        .on_window_event(move |window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
+                let sessions = window.state::<SessionStore>();
+                let has_active_session = {
+                    let sessions_guard = sessions.lock().unwrap();
+                    !sessions_guard.is_empty()
+                };
 
-                    if let Ok(state) = shutdown_state.lock() {
-                        is_closing = state.is_closing_unconditionally;
-                    }
+                let shutdown_state = window.state::<Arc<Mutex<ShutdownState>>>();
+                let mut is_closing = false;
+                if let Ok(state) = shutdown_state.lock() {
+                    is_closing = state.is_closing_unconditionally;
+                }
 
-                    if is_closing || !has_active_session {
-                        if let Ok(app_data_dir) = window.app_handle().path().app_data_dir() {
-                            let _ = single_instance::cleanup_lockfile(&app_data_dir);
-                        }
-                        return;
-                    }
+                if is_closing || !has_active_session {
+                    return;
+                }
 
-                    api.prevent_close();
-                    window.emit("show-close-dialog", ()).unwrap();
-                }
-                WindowEvent::Destroyed => {
-                    // Final cleanup when window is destroyed (T032)
-                    info!("[CLOSE] WindowEvent::Destroyed fired");
-                    if let Ok(app_data_dir) = window.app_handle().path().app_data_dir() {
-                        if let Err(e) = single_instance::cleanup_lockfile(&app_data_dir) {
-                            error!("Failed to cleanup lockfile on window destroy: {}", e);
-                        }
-                    }
-                }
-                WindowEvent::Focused(focused) => {
-                    // Diagnostic logging for window focus changes
-                    info!("[WINDOW] Focus changed: {}", focused);
-                }
-                _ => {}
+                api.prevent_close();
+                window.emit("show-close-dialog", ()).unwrap();
             }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

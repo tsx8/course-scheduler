@@ -24,6 +24,12 @@ pub async fn import_json(
     session_id: String,
     sessions: State<'_, Mutex<HashMap<String, User>>>,
 ) -> CommandResult<ImportStats> {
+    let uid = {
+        let sessions_lock = sessions.lock().map_err(|_| "Failed to lock sessions")?;
+        let u = sessions_lock.get(&session_id).ok_or("Invalid session")?;
+        u.id.clone()
+    };
+
     info!("Importing JSON from: {}", file_path);
 
     let json_content =
@@ -38,12 +44,6 @@ pub async fn import_json(
     let teacher_count = all_data.teachers.len();
     let course_count = all_data.courses.len();
     let schedule_count = all_data.scheduled_classes.len();
-
-    let uid = {
-        let sessions_lock = sessions.lock().map_err(|_| "Failed to lock sessions")?;
-        sessions_lock.get(&session_id).map(|u| u.id.clone())
-    }
-    .ok_or("Invalid session or user not found")?;
 
     info!(
         "Parsed JSON: {} teachers, {} courses, {} schedules",

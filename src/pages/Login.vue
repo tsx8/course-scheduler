@@ -22,11 +22,12 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { useMessage, useDialog } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
 const message = useMessage()
+const dialog = useDialog()
 const authStore = useAuthStore()
 
 const formRef = ref(null)
@@ -80,7 +81,15 @@ const handleLogin = async () => {
     }
   } catch (error) {
     console.error('Login error:', error)
-    message.error('用户名或密码错误')
+    if (String(error).includes("同一时间只能登录一个会话")) {
+      dialog.error({
+        title: '登录被阻止',
+        content: '检测到另一个活跃会话。同一时间只能在一个窗口登录。\n\n请关闭其他已登录的窗口，或注销其他会话后再试。',
+        positiveText: '知道了'
+      })
+    } else {
+      message.error('用户名或密码错误')
+    }
   } finally {
     loading.value = false
   }

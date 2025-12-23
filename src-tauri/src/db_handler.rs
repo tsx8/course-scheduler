@@ -190,7 +190,6 @@ pub async fn load_data(state: State<'_, AppState>) -> CommandResult<AllData> {
     Ok(data)
 }
 
-/// Save current application state to temp tables (auto-save target)
 #[tauri::command]
 pub async fn save_temp_data(
     content: AllData,
@@ -230,8 +229,6 @@ pub async fn save_temp_data(
     Ok(())
 }
 
-/// Commit temporary state to permanent storage
-/// Copies all temp table contents to main tables
 #[tauri::command]
 pub async fn commit_data(
     app_handle: tauri::AppHandle,
@@ -348,7 +345,6 @@ pub async fn clear_temp_data(
 ) -> CommandResult<()> {
     info!("Clearing all temp tables (revert)");
 
-    // Get user ID from session for audit logging
     let user_id = {
         let sessions_lock = sessions
             .lock()
@@ -373,7 +369,11 @@ pub async fn clear_temp_data(
 
 /// Load AllData from database, prioritizing temp tables
 /// Public function for use by import_export module
-pub fn load_all_data_from_connection(conn: &Connection, use_temp: bool, include_auth: bool) -> CommandResult<AllData> {
+pub fn load_all_data_from_connection(
+    conn: &Connection,
+    use_temp: bool,
+    include_auth: bool,
+) -> CommandResult<AllData> {
     Ok(AllData {
         time: load_time_slots(conn, use_temp)?,
         day: load_days(conn, use_temp)?,
@@ -386,8 +386,16 @@ pub fn load_all_data_from_connection(conn: &Connection, use_temp: bool, include_
         scheduled_classes: load_scheduled_classes(conn, use_temp)?,
         teacher_unavailability: load_teacher_unavailability(conn, use_temp)?,
         schedule_density: load_schedule_density(conn, use_temp)?,
-        roles: if include_auth { load_roles(conn)? } else { Vec::new() },
-        users: if include_auth { load_users(conn)? } else { Vec::new() },
+        roles: if include_auth {
+            load_roles(conn)?
+        } else {
+            Vec::new()
+        },
+        users: if include_auth {
+            load_users(conn)?
+        } else {
+            Vec::new()
+        },
     })
 }
 
