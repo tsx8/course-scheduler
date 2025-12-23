@@ -1,33 +1,19 @@
-// Database handler module for SQLite persistence
-// Feature: 001-sqlite-migration
-// Replaces file_handler.rs with database operations
-
 use crate::auth::hash_password;
-use crate::import_export::process_json_format;
 use crate::models::*;
 use chrono::Local;
 use rusqlite::{params, Connection, Result as SqlResult, Transaction};
 use serde_json::json;
-use std::path::Path;
 use std::sync::Mutex;
 use tauri::State;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-// Type alias for Tauri command results
 type CommandResult<T> = Result<T, String>;
 
-// AppState structure holding database connection
 pub struct AppState {
     pub db: Mutex<Connection>,
 }
 
-// ============================================================================
-// DATABASE INITIALIZATION
-// ============================================================================
-
-/// Initialize database schema by executing schema.sql
-/// This creates all main and temp tables with foreign key constraints
 pub fn init_database(conn: &Connection) -> SqlResult<()> {
     info!("Initializing database schema");
     // Enable foreign key constraints
@@ -41,8 +27,6 @@ pub fn init_database(conn: &Connection) -> SqlResult<()> {
     Ok(())
 }
 
-/// Seed roles and create default admin user (Feature: 001-rbac-audit-system)
-/// Called once after database initialization
 pub fn run_auth_migration(conn: &Connection) -> CommandResult<()> {
     info!("Running auth migration - seeding roles and admin user");
 
@@ -186,216 +170,6 @@ pub fn auto_create_user_for_teacher(
     Ok(true)
 }
 
-// ============================================================================
-// JSON MIGRATION
-// ============================================================================
-
-/// Migrate existing data.json to SQLite database
-/// Called on app startup - only runs if database is empty and JSON exists
-/// Checks both new location (AppData/Roaming) and old location (AppData/Local)
-pub fn migrate_from_json(
-    conn: &Connection,
-    app_data_dir: &Path,
-) -> CommandResult<(bool, Option<MigrationStats>)> {
-    info!("Checking for JSON migration");
-    // Check if temp tables have data (indicates database already initialized)
-    let has_data: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM time_slots UNION SELECT 1 FROM time_slots_temp)",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| {
-            error!("Failed to check database state: {}", e);
-            format!("Failed to check database state: {}", e)
-        })?;
-
-    if has_data {
-        info!("Database already has data, skipping migration");
-        return Ok((false, None)); // Skip migration - database already has data
-    }
-
-    // Multi-path detection: Check new location first, then old location
-    let new_json_path = app_data_dir.join("data.json");
-    let old_json_path = if let Some(local_dir) = dirs::data_local_dir() {
-        local_dir.join("course-scheduler").join("data.json")
-    } else {
-        std::path::PathBuf::new() // Empty path that won't exist
-    };
-
-    let (json_path, source_location) = if new_json_path.exists() {
-        info!(
-            "Found data.json in new location: {}",
-            new_json_path.display()
-        );
-        (new_json_path, "AppData/Roaming")
-    } else if old_json_path.exists() {
-        info!(
-            "Found data.json in old location: {}",
-            old_json_path.display()
-        );
-        (old_json_path, "AppData/Local")
-    } else {
-        info!("No data.json found in any location, skipping migration");
-        return Ok((false, None)); // Skip migration - no JSON file to migrate
-    };
-
-    info!("Starting migration from: {}", json_path.display());
-
-    let json_content = std::fs::read_to_string(&json_path).map_err(|e| {
-        error!("Failed to read data.json: {}", e);
-        format!("Failed to read data.json: {}", e)
-    })?;
-
-    let json_value: serde_json::Value = serde_json::from_str(&json_content).map_err(|e| {
-        error!("Invalid raw JSON format: {}", e);
-        format!("Invalid raw JSON format: {}", e)
-    })?;
-
-    let normalized_json = process_json_format(json_value);
-
-    let all_data: AllData = serde_json::from_value(normalized_json).map_err(|e| {
-        error!("Failed to map normalized JSON to model: {}", e);
-        format!("Failed to map normalized JSON to model: {}", e)
-    })?;
-
-    let teacher_count = all_data.teachers.len();
-    let course_count = all_data.courses.len();
-    let schedule_count = all_data.scheduled_classes.len();
-
-    info!(
-        "Parsed JSON: {} teachers, {} courses, {} campuses, {} schedules",
-        teacher_count,
-        course_count,
-        all_data.campuses.len(),
-        schedule_count
-    );
-
-    // Begin transaction for migration
-    let tx = conn.unchecked_transaction().map_err(|e| {
-        error!("Failed to begin migration transaction: {}", e);
-        format!("Failed to begin migration transaction: {}", e)
-    })?;
-
-    // Import data into MAIN tables only (not temp tables)
-    // Temp tables should remain empty after migration
-    write_all_data_to_tables(&tx, &all_data, false)?; // Main tables only
-
-    tx.commit().map_err(|e| {
-        error!("Failed to commit migration: {}", e);
-        format!("Failed to commit migration: {}", e)
-    })?;
-
-    info!("Migration transaction committed");
-
-    // Clear temp tables to ensure they're empty after migration
-    clear_all_temp_tables(conn, None)?;
-    info!("Temp tables cleared after migration");
-
-    // Validate temp tables are empty (post-migration check)
-    let temp_tables = [
-        "scheduled_classes_temp",
-        "teacher_unavailability_temp",
-        "teacher_courses_temp",
-        "teachers_temp",
-        "course_venues_temp",
-        "courses_temp",
-        "schedule_density_temp",
-        "venues_temp",
-        "campuses_temp",
-        "days_temp",
-        "time_slots_temp",
-    ];
-
-    let mut total_temp_rows = 0;
-    for table in &temp_tables {
-        let count: i64 = conn
-            .query_row(&format!("SELECT COUNT(*) FROM {}", table), [], |row| {
-                row.get(0)
-            })
-            .unwrap_or(0);
-        total_temp_rows += count;
-    }
-
-    if total_temp_rows > 0 {
-        error!(
-            "Temp tables not empty after migration: {} rows",
-            total_temp_rows
-        );
-    } else {
-        info!("Post-migration validation passed: temp tables empty");
-    }
-
-    // Backup original JSON file with timestamp
-    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let backup_filename = format!("data.json.backup-{}", timestamp);
-
-    // Create backup in source directory first
-    let temp_backup_path = json_path
-        .parent()
-        .unwrap_or(app_data_dir)
-        .join(&backup_filename);
-
-    if let Err(e) = std::fs::rename(&json_path, &temp_backup_path) {
-        error!("Failed to backup data.json: {}", e);
-        eprintln!("Warning: Failed to backup data.json: {}", e);
-        // Continue anyway - migration succeeded
-    } else {
-        info!("Created temporary backup: {}", temp_backup_path.display());
-
-        // Move backup to new app data directory
-        let final_backup_path = app_data_dir.join(&backup_filename);
-        match std::fs::rename(&temp_backup_path, &final_backup_path) {
-            Ok(_) => {
-                info!(
-                    "Backup moved from {} to {}",
-                    temp_backup_path.display(),
-                    final_backup_path.display()
-                );
-            }
-            Err(e) => {
-                // If rename fails (cross-device), try copy + delete
-                warn!("Failed to move backup ({}), trying copy+delete", e);
-                match std::fs::copy(&temp_backup_path, &final_backup_path) {
-                    Ok(_) => {
-                        let _ = std::fs::remove_file(&temp_backup_path);
-                        info!(
-                            "Backup copied and moved to: {}",
-                            final_backup_path.display()
-                        );
-                    }
-                    Err(copy_err) => {
-                        warn!(
-                            "Failed to move backup, keeping in source directory: {}",
-                            copy_err
-                        );
-                        info!("Backup file location: {}", temp_backup_path.display());
-                    }
-                }
-            }
-        }
-    }
-
-    info!("Migration completed successfully");
-
-    // Return migration stats
-    let stats = MigrationStats {
-        teachers: teacher_count,
-        courses: course_count,
-        schedules: schedule_count,
-        source_path: json_path.to_string_lossy().to_string(),
-        source_location: source_location.to_string(),
-    };
-
-    Ok((true, Some(stats))) // Migration completed
-}
-
-// ============================================================================
-// TAURI COMMANDS (Frontend API)
-// ============================================================================
-
-/// Load current application state from database
-/// Prioritizes temp tables (working state) over main tables (committed state)
 #[tauri::command]
 pub async fn load_data(state: State<'_, AppState>) -> CommandResult<AllData> {
     info!("Loading data from database");

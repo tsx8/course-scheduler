@@ -7,6 +7,7 @@ class DataManager:
     def __init__(self, data):
         self.data = data
         self._create_mappings()
+        self._process_relations()
         self._preprocess_data()
 
     def _create_mappings(self):
@@ -15,17 +16,15 @@ class DataManager:
         self.day = {item['id']: item for item in self.data['day']}
         self.courses = {item['id']: item for item in self.data['courses']}
         self.teachers = {item['id']: item for item in self.data['teachers']}
+        self.venues = {item['id']: item for item in self.data.get('venues', [])}
+        self.campuses = {item['id']: item for item in self.data['campuses']}
         
         self.time_list = self.data['time']
         self.day_list = self.data['day']
         self.course_list = self.data['courses']
         self.teacher_list = self.data['teachers']
+        self.venue_list = self.data.get('venues', [])
         self.campus_list = self.data['campuses']
-        
-        self.venue_list = []
-        for campus in self.campus_list:
-            for venue in campus['venues']:
-                self.venue_list.append({**venue, 'campus_id': campus['id']})
 
         self.time_id_to_idx = {t['id']: i for i, t in enumerate(self.time_list)}
         self.day_id_to_idx = {d['id']: i for i, d in enumerate(self.day_list)}
@@ -34,17 +33,52 @@ class DataManager:
         self.venue_id_to_idx = {v['id']: i for i, v in enumerate(self.venue_list)}
         self.campus_id_to_idx = {c['id']: i for i, c in enumerate(self.campus_list)}
         
-        self.venue_idx_to_campus_idx = {
-            self.venue_id_to_idx[v['id']]: self.campus_id_to_idx[c['id']]
-            for c in self.campus_list for v in c['venues']
-        }
+        self.venue_idx_to_campus_idx = {}
+        for v_idx, venue in enumerate(self.venue_list):
+            if 'campus_id' in venue:
+                c_id = venue['campus_id']
+                if c_id in self.campus_id_to_idx:
+                    self.venue_idx_to_campus_idx[v_idx] = self.campus_id_to_idx[c_id]
         
         self.density_map = {}
-        for c_idx, campus in enumerate(self.campus_list):
-            for density in campus.get('schedule_density', []):
+        for density in self.data.get('schedule_density', []):
+            if density['campus_id'] in self.campus_id_to_idx and \
+               density['day_id'] in self.day_id_to_idx and \
+               density['time_id'] in self.time_id_to_idx:
+                
+                c_idx = self.campus_id_to_idx[density['campus_id']]
                 d_idx = self.day_id_to_idx[density['day_id']]
                 t_idx = self.time_id_to_idx[density['time_id']]
                 self.density_map[(c_idx, d_idx, t_idx)] = density['count']
+    
+    def _process_relations(self):
+        """Enrich objects with relationship data from 3NF tables for easier solver access."""
+        for teacher in self.teacher_list:
+            teacher['teaches'] = []
+            teacher['unavailable'] = []
+
+        for tc in self.data.get('teacher_courses', []):
+            t_id = tc['teacher_id']
+            c_id = tc['course_id']
+            if t_id in self.teachers:
+                self.teachers[t_id]['teaches'].append(c_id)
+
+        for tu in self.data.get('teacher_unavailability', []):
+            t_id = tu['teacher_id']
+            if t_id in self.teachers:
+                self.teachers[t_id]['unavailable'].append({
+                    'day_id': tu['day_id'],
+                    'time_id': tu['time_id']
+                })
+
+        for course in self.course_list:
+            course['place'] = []
+        
+        for cv in self.data.get('course_venues', []):
+            c_id = cv['course_id']
+            v_id = cv['venue_id']
+            if c_id in self.courses:
+                self.courses[c_id]['place'].append({'venue_id': v_id})
 
 
     def _preprocess_data(self):
@@ -62,35 +96,39 @@ class DataManager:
         
         self.existing_teacher_day_class_count = {}
 
-        for t_idx, teacher in enumerate(self.teacher_list):
-            for scheduled in teacher.get('scheduled', []):
-                time_id = scheduled['time_id']
-                day_id = scheduled['day_id']
-                venue_id = scheduled['venue_id']
-                campus_id = scheduled['campus_id']
+        for scheduled in self.data.get('scheduled_classes', []):
+            teacher_id = scheduled['teacher_id']
+            if teacher_id not in self.teacher_id_to_idx:
+                continue
                 
-                hours = self.time[time_id]['corresponding_hours']
-                self.existing_teacher_hours[t_idx] += hours
-                
-                d_idx = self.day_id_to_idx[day_id]
-                i_idx = self.time_id_to_idx[time_id]
-                v_idx = self.venue_id_to_idx[venue_id]
-                c_idx = self.campus_id_to_idx[campus_id]
-                
-                count_key = (t_idx, d_idx)
-                self.existing_teacher_day_class_count[count_key] = self.existing_teacher_day_class_count.get(count_key, 0) + 1
-                
-                self.existing_work_days[t_idx].add(d_idx)
+            t_idx = self.teacher_id_to_idx[teacher_id]
+            time_id = scheduled['time_id']
+            day_id = scheduled['day_id']
+            venue_id = scheduled['venue_id']
+            campus_id = scheduled['campus_id']
+            
+            hours = self.time[time_id]['corresponding_hours']
+            self.existing_teacher_hours[t_idx] += hours
+            
+            d_idx = self.day_id_to_idx[day_id]
+            i_idx = self.time_id_to_idx[time_id]
+            v_idx = self.venue_id_to_idx[venue_id]
+            c_idx = self.campus_id_to_idx[campus_id]
+            
+            count_key = (t_idx, d_idx)
+            self.existing_teacher_day_class_count[count_key] = self.existing_teacher_day_class_count.get(count_key, 0) + 1
+            
+            self.existing_work_days[t_idx].add(d_idx)
 
-                key = (v_idx, d_idx, i_idx)
-                self.existing_venue_usage[key] = self.existing_venue_usage.get(key, 0) + 1
-                
-                if (t_idx, d_idx) in self.existing_teacher_day_campus and self.existing_teacher_day_campus[(t_idx, d_idx)] != c_idx:
-                    print(f"ERROR: Teacher {teacher['name']} has conflicting existing schedules on the same day across different campuses.")
-                self.existing_teacher_day_campus[(t_idx, d_idx)] = c_idx
-                self.teacher_has_existing_campus[t_idx][c_idx] = True
-                
-                self.existing_teacher_day_time_busy[(t_idx, d_idx, i_idx)] = True
+            key = (v_idx, d_idx, i_idx)
+            self.existing_venue_usage[key] = self.existing_venue_usage.get(key, 0) + 1
+            
+            if (t_idx, d_idx) in self.existing_teacher_day_campus and self.existing_teacher_day_campus[(t_idx, d_idx)] != c_idx:
+                print(f"ERROR: Teacher {self.teacher_list[t_idx]['name']} has conflicting existing schedules on the same day across different campuses.")
+            self.existing_teacher_day_campus[(t_idx, d_idx)] = c_idx
+            self.teacher_has_existing_campus[t_idx][c_idx] = True
+            
+            self.existing_teacher_day_time_busy[(t_idx, d_idx, i_idx)] = True
 
 def solve_scheduling(data_manager):
     """Builds and solves the CP-SAT model."""
@@ -438,7 +476,7 @@ def solve_scheduling(data_manager):
         print(f'Solution found with status: {"OPTIMAL" if status == cp_model.OPTIMAL else "FEASIBLE"}')
         print(f'Objective value (lower is better): {solver.ObjectiveValue()}')
         
-        new_schedules = {}
+        new_class_entries = []
         for key, var in x.items():
             if solver.Value(var) == 1:
                 t_idx, c_idx, d_idx, i_idx, v_idx = key
@@ -448,24 +486,20 @@ def solve_scheduling(data_manager):
 
                 new_schedule_item = {
                     "id": str(uuid.uuid4()),
+                    "teacher_id": teacher_id,
                     "day_id": dm.day_list[d_idx]['id'],
                     "time_id": dm.time_list[i_idx]['id'],
                     "course_id": dm.course_list[c_idx]['id'],
                     "campus_id": venue['campus_id'],
                     "venue_id": venue['id']
                 }
-                
-                if teacher_id not in new_schedules:
-                    new_schedules[teacher_id] = []
-                new_schedules[teacher_id].append(new_schedule_item)
+                new_class_entries.append(new_schedule_item)
         
-        for teacher in dm.data['teachers']:
-            if teacher['id'] in new_schedules:
-                # Ensure 'scheduled' list exists before extending
-                if 'scheduled' not in teacher:
-                    teacher['scheduled'] = []
-                teacher['scheduled'].extend(new_schedules[teacher['id']])
-                print(f"Scheduled {len(new_schedules[teacher['id']])} new class(es) for {teacher['name']}.")
+        if 'scheduled_classes' not in dm.data:
+            dm.data['scheduled_classes'] = []
+        dm.data['scheduled_classes'].extend(new_class_entries)
+
+        print(f"Scheduled {len(new_class_entries)} new class(es).")
 
         return dm.data
 

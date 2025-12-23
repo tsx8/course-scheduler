@@ -702,87 +702,6 @@ async fn run_solver(
         current_data.teachers.len(),
         current_data.courses.len()
     );
-    let mut legacy_json = serde_json::json!({
-        "time": current_data.time,
-        "day": current_data.day,
-        "campuses": [],
-        "courses": [],
-        "teachers": []
-    });
-
-    for campus in &current_data.campuses {
-        let mut c_json = serde_json::to_value(campus).unwrap();
-        let c_venues: Vec<_> = current_data
-            .venues
-            .iter()
-            .filter(|v| v.campus_id == campus.id)
-            .collect();
-        let c_density: Vec<_> = current_data
-            .schedule_density
-            .iter()
-            .filter(|d| d.campus_id == campus.id)
-            .collect();
-
-        c_json.as_object_mut().unwrap().insert(
-            "venues".to_string(),
-            serde_json::to_value(c_venues).unwrap(),
-        );
-        c_json.as_object_mut().unwrap().insert(
-            "schedule_density".to_string(),
-            serde_json::to_value(c_density).unwrap(),
-        );
-        legacy_json["campuses"].as_array_mut().unwrap().push(c_json);
-    }
-
-    for course in &current_data.courses {
-        let mut co_json = serde_json::to_value(course).unwrap();
-        let co_venues: Vec<_> = current_data
-            .course_venues
-            .iter()
-            .filter(|cv| cv.course_id == course.id)
-            .map(|cv| serde_json::json!({ "venue_id": cv.venue_id }))
-            .collect();
-
-        co_json.as_object_mut().unwrap().insert(
-            "place".to_string(),
-            serde_json::to_value(co_venues).unwrap(),
-        );
-        legacy_json["courses"].as_array_mut().unwrap().push(co_json);
-    }
-
-    for teacher in &current_data.teachers {
-        let mut t_json = serde_json::to_value(teacher).unwrap();
-        let teaches: Vec<_> = current_data
-            .teacher_courses
-            .iter()
-            .filter(|tc| tc.teacher_id == teacher.id)
-            .map(|tc| &tc.course_id)
-            .collect();
-        let unavailable: Vec<_> = current_data
-            .teacher_unavailability
-            .iter()
-            .filter(|tu| tu.teacher_id == teacher.id)
-            .collect();
-        let scheduled: Vec<_> = current_data
-            .scheduled_classes
-            .iter()
-            .filter(|sc| sc.teacher_id == teacher.id)
-            .collect();
-
-        t_json.as_object_mut().unwrap().insert(
-            "teaches".to_string(),
-            serde_json::to_value(teaches).unwrap(),
-        );
-        t_json.as_object_mut().unwrap().insert(
-            "unavailable".to_string(),
-            serde_json::to_value(unavailable).unwrap(),
-        );
-        t_json.as_object_mut().unwrap().insert(
-            "scheduled".to_string(),
-            serde_json::to_value(scheduled).unwrap(),
-        );
-        legacy_json["teachers"].as_array_mut().unwrap().push(t_json);
-    }
 
     // Create temporary JSON file for solver input
     let app_data_dir = app_handle
@@ -793,7 +712,7 @@ async fn run_solver(
     let output_path = app_data_dir.join("solver_output.tmp.json");
 
     // Write current data to input JSON
-    async_fs::write(&input_path, serde_json::to_string(&legacy_json).unwrap())
+    async_fs::write(&input_path, serde_json::to_string(&current_data).unwrap())
         .await
         .map_err(|e| format!("Failed to write solver input: {}", e))?;
 
@@ -839,13 +758,9 @@ async fn run_solver(
     let result_content = async_fs::read_to_string(&output_path)
         .await
         .map_err(|e| e.to_string())?;
-    let raw_solved_json: serde_json::Value =
-        serde_json::from_str(&result_content).map_err(|e| e.to_string())?;
 
-    let normalized_json = import_export::process_json_format(raw_solved_json);
-
-    let solved_data: AllData = serde_json::from_value(normalized_json)
-        .map_err(|e| format!("Failed to parse normalized solver output: {}", e))?;
+    let solved_data: AllData = serde_json::from_str(&result_content)
+        .map_err(|e| format!("Failed to parse solver output: {}", e))?;
 
     {
         let db = app_state.db.lock().unwrap();
@@ -1053,11 +968,6 @@ fn main() {
             let conn = Connection::open(&db_path)
                 .map_err(|e| {
                     error!("无法打开数据库: {}\n数据库文件: {}", e, db_path.display());
-                    eprintln!("无法打开数据库: {}\n数据库文件: {}", e, db_path.display());
-                    if e.to_string().contains("disk") || e.to_string().contains("space") {
-                        error!("磁盘空间不足");
-                        eprintln!("\n错误: 磁盘空间不足！请清理磁盘空间后重试。");
-                    }
                     e
                 })
                 .expect("Failed to open database");
@@ -1071,33 +981,6 @@ fn main() {
             if let Err(e) = db_handler::run_auth_migration(&conn) {
                 warn!("Auth migration failed: {}", e);
                 // Non-critical - continue without admin user
-            }
-
-            // Migrate from JSON if needed
-            info!("Checking for JSON migration");
-            match db_handler::migrate_from_json(&conn, &data_dir) {
-                Ok((migrated, stats_opt)) => {
-                    if migrated {
-                        info!("Successfully migrated data from JSON to SQLite");
-                        println!("Successfully migrated data from JSON to SQLite");
-
-                        if let Some(stats) = stats_opt {
-                            info!(
-                                "Migration stats: {} teachers, {} courses, {} schedules",
-                                stats.teachers, stats.courses, stats.schedules
-                            );
-                        }
-                    } else {
-                        info!("No JSON migration needed");
-                    }
-                }
-                Err(e) => {
-                    error!("Migration failed: {}", e);
-                    eprintln!(
-                        "Warning: Migration failed, starting with empty database: {}",
-                        e
-                    );
-                }
             }
 
             app.manage(AppState {
