@@ -9,10 +9,8 @@ import ScheduleCell from '../components/ScheduleCell.vue';
 const dataStore = useDataStore();
 const authStore = useAuthStore();
 
-// For teachers, automatically select their own teacher_id; for schedulers, show dropdown
 const teacherOptions = computed(() => {
     if (authStore.isTeacher) {
-        // Teacher can only see themselves
         const currentTeacher = dataStore.teachers.find(t => t.id === authStore.currentUser?.teacher_id);
         return currentTeacher ? [{ label: currentTeacher.name, value: currentTeacher.id }] : [];
     }
@@ -24,21 +22,18 @@ const days = computed(() => dataStore.day);
 
 const selectedTeacherId = computed({
     get: () => {
-        // If user is a teacher, force selection to their teacher_id
         if (authStore.isTeacher && authStore.currentUser?.teacher_id) {
             return authStore.currentUser.teacher_id;
         }
         return dataStore.selectedTeacherIdForTeacherView;
     },
     set: (val) => {
-        // Only allow schedulers to change selection
         if (authStore.isScheduler) {
             dataStore.selectedTeacherIdForTeacherView = val;
         }
     }
 });
 
-// Auto-select teacher on mount for teacher role users
 onMounted(() => {
     if (authStore.isTeacher && authStore.currentUser?.teacher_id) {
         dataStore.selectedTeacherIdForTeacherView = authStore.currentUser.teacher_id;
@@ -112,15 +107,13 @@ const columns = computed(() => {
     ];
 });
 
-// CSV export function for teacher timetable
 const exportCSV = () => {
     if (!selectedTeacherId.value || !selectedTeacher.value) return;
 
     const teacher = selectedTeacher.value;
     const teacherSchedules = dataStore.scheduledClassesByTeacher(selectedTeacherId.value);
 
-    // Build CSV header
-    let csv = '\uFEFF'; // UTF-8 BOM for Excel compatibility
+    let csv = '\uFEFF';
     csv += `教师课表,${teacher.name}\n`;
     csv += '时间段,';
     days.value.forEach(day => {
@@ -128,7 +121,6 @@ const exportCSV = () => {
     });
     csv += '\n';
 
-    // Build CSV rows
     timeSlots.value.forEach(time => {
         csv += `${time.value},`;
         days.value.forEach(day => {
@@ -145,7 +137,6 @@ const exportCSV = () => {
         csv += '\n';
     });
 
-    // Download CSV
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);

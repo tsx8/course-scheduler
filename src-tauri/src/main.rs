@@ -33,8 +33,6 @@ pub struct ShutdownState {
 pub struct SessionLockState {
     file: Mutex<Option<File>>,
 }
-
-/// Custom writer that reopens log file if it's deleted
 struct ReopenableLogWriter {
     log_path: PathBuf,
     file: Mutex<Option<File>>,
@@ -72,7 +70,6 @@ impl ReopenableLogWriter {
 
 impl Write for ReopenableLogWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // Try to ensure file exists before writing
         if let Err(e) = self.ensure_file_exists() {
             eprintln!("Failed to reopen log file: {}", e);
             return Err(e);
@@ -112,40 +109,29 @@ fn get_lock_file_path(app_handle: &AppHandle) -> std::io::Result<PathBuf> {
     Ok(data_dir.join("session.lock"))
 }
 
-/// Initialize file-based logging system with daily rotation
-/// Logs are written to %APPDATA%/Roaming/com.tsxb.course-scheduler/logs/
 fn init_logging(logs_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    // Create logs directory if it doesn't exist
     if !logs_dir.exists() {
         fs::create_dir_all(logs_dir)?;
     }
 
-    // Get local date for log file naming
     let date_str = Local::now().format("%Y.%m.%d").to_string();
     let log_filename = format!("course-scheduler-{}.log", date_str);
     let log_path = logs_dir.join(&log_filename);
 
     eprintln!("Creating log file: {}", log_path.display());
 
-    // Create custom reopenable writer
     let log_writer = ReopenableLogWriter::new(log_path.clone())?;
 
-    // Wrap in non-blocking writer for async writes
     let (non_blocking_writer, _guard) = non_blocking(log_writer);
 
-    // Store guard to prevent it from being dropped (which would stop logging)
-    // We'll leak it intentionally since logging needs to persist for app lifetime
     std::mem::forget(_guard);
 
-    // Configure log format: [YYYY-MM-DD HH:MM:SS.mmm] [LEVEL] [module] message
     let file_layer = fmt::layer()
         .with_ansi(false) // No color codes in file
         .with_writer(non_blocking_writer);
 
-    // Use RUST_LOG env var or default to INFO level
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    // Build subscriber with file output
     tracing_subscriber::registry()
         .with(env_filter)
         .with(file_layer)
@@ -158,8 +144,6 @@ fn init_logging(logs_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Clean up old log files, keeping minimum 3 most recent
-/// Deletes files older than 30 days
 fn cleanup_old_logs(logs_dir: &PathBuf) {
     info!("Starting log cleanup");
 
@@ -183,7 +167,6 @@ fn cleanup_old_logs(logs_dir: &PathBuf) {
         })
         .collect();
 
-    // Sort by modification time (newest first)
     log_files.sort_by(|a, b| {
         let a_time = a.metadata().and_then(|m| m.modified()).ok();
         let b_time = b.metadata().and_then(|m| m.modified()).ok();
@@ -194,12 +177,10 @@ fn cleanup_old_logs(logs_dir: &PathBuf) {
     let thirty_days = std::time::Duration::from_secs(30 * 24 * 60 * 60);
 
     for (idx, entry) in log_files.iter().enumerate() {
-        // Keep minimum 3 most recent files
         if idx < 3 {
             continue;
         }
 
-        // Delete files older than 30 days
         if let Ok(metadata) = entry.metadata() {
             if let Ok(modified) = metadata.modified() {
                 if let Ok(age) = now.duration_since(modified) {
@@ -273,9 +254,7 @@ async fn authenticate_user(
         .map_err(|e| format!("无法访问会话锁文件: {}", e))?;
 
     match file.try_lock_exclusive() {
-        Ok(_) => {
-            // Lock acquired successfully, proceed with auth
-        }
+        Ok(_) => {}
         Err(_) => {
             return Err("当前已有其他会话正在运行，系统限制同一时间只能登录一个会话。".to_string());
         }
@@ -285,7 +264,6 @@ async fn authenticate_user(
 
     let db = state.db.lock().unwrap();
 
-    // Query user from main users table
     let result: Result<(String, String, String, String, String, Option<String>), _> = db.query_row(
         "SELECT u.id, u.username, u.password_hash, r.name as role, u.role_id, u.teacher_id 
          FROM users u 
@@ -420,7 +398,6 @@ async fn logout_user(
 
     info!("Logout attempt for session: {}", session_id);
 
-    // Get user before removing session (for audit log)
     let user_info = {
         let sessions_guard = sessions.lock().unwrap();
         sessions_guard
@@ -460,14 +437,12 @@ async fn logout_user(
     Ok(true)
 }
 
-/// Get current user from session (for session restoration)
 #[command]
 async fn get_current_user(
     session_id: String,
     state: State<'_, AppState>,
     sessions: State<'_, SessionStore>,
 ) -> Result<serde_json::Value, String> {
-    // Check if session exists
     let user = {
         let sessions_guard = sessions.lock().unwrap();
         sessions_guard.get(&session_id).cloned()
@@ -518,7 +493,6 @@ async fn create_user(
 ) -> Result<String, String> {
     use crate::auth::hash_password;
 
-    // Get current user ID from session
     let sessions_lock = sessions
         .lock()
         .map_err(|_| "Failed to lock sessions".to_string())?;
@@ -528,7 +502,6 @@ async fn create_user(
     let creator_user_id = current_user.id.clone();
     drop(sessions_lock);
 
-    // Hash password
     let password_hash =
         hash_password(&password).map_err(|e| format!("Failed to hash password: {}", e))?;
 
@@ -543,7 +516,6 @@ async fn create_user(
     )
 }
 
-/// Update user (Scheduler only)
 #[command]
 async fn update_user(
     user_id: String,
@@ -582,7 +554,6 @@ async fn reset_password(
 ) -> Result<(), String> {
     use crate::auth::hash_password;
 
-    // Get current user ID from session
     let sessions_lock = sessions
         .lock()
         .map_err(|_| "Failed to lock sessions".to_string())?;
@@ -592,7 +563,6 @@ async fn reset_password(
     let admin_user_id = current_user.id.clone();
     drop(sessions_lock);
 
-    // Hash new password
     let new_password_hash =
         hash_password(&new_password).map_err(|e| format!("Failed to hash password: {}", e))?;
 
@@ -620,7 +590,6 @@ async fn delete_user(
     db_handler::delete_user(&db, &user_id, &current_user_id)
 }
 
-/// Change own password (All users)
 #[command]
 async fn change_own_password(
     old_password: String,
@@ -631,7 +600,6 @@ async fn change_own_password(
 ) -> Result<(), String> {
     use crate::auth::hash_password;
 
-    // Get current user ID from session
     let sessions_lock = sessions
         .lock()
         .map_err(|_| "Failed to lock sessions".to_string())?;
@@ -641,7 +609,6 @@ async fn change_own_password(
     let user_id = current_user.id.clone();
     drop(sessions_lock);
 
-    // Hash new password
     let new_password_hash =
         hash_password(&new_password).map_err(|e| format!("Failed to hash password: {}", e))?;
 
@@ -649,7 +616,6 @@ async fn change_own_password(
     db_handler::change_own_password(&db, &user_id, &old_password, &new_password_hash)
 }
 
-/// List audit logs with pagination and filters (Feature: 001-rbac-audit-system Phase 9)
 #[command]
 async fn list_audit_logs(
     page: Option<usize>,
@@ -661,7 +627,6 @@ async fn list_audit_logs(
 ) -> Result<AuditLogsResponse, String> {
     info!("Listing audit logs - session: {}", session_id);
 
-    // Verify user is scheduler or admin
     {
         let sessions_lock = sessions
             .lock()
@@ -858,7 +823,6 @@ fn check_has_unsaved(db: &Connection) -> bool {
             }
             Err(e) => {
                 warn!("Failed to check temp table {}: {}", table, e);
-                // Continue checking other tables
             }
         }
     }
@@ -882,7 +846,6 @@ async fn finalize_and_close(
     };
     if save {
         info!("Finalizing with save (committing data)");
-        // Commit temp data to main tables
         db_handler::commit_data(
             app_handle.clone(),
             app_state.clone(),
@@ -979,20 +942,16 @@ fn main() {
                 fs::create_dir_all(&data_dir).expect("Failed to create app data directory.");
             }
 
-            // Initialize logging system FIRST (before any other operations)
             let logs_dir = data_dir.join("logs");
             if let Err(e) = init_logging(&logs_dir) {
                 eprintln!("Failed to initialize logging: {}", e);
-                // Continue without logging - not critical
             }
 
-            // Clean up old log files
             cleanup_old_logs(&logs_dir);
 
             info!("Application starting");
             info!("App data directory: {}", data_dir.display());
 
-            // Open or create SQLite database
             let db_path = data_dir.join("course_scheduler.db");
             info!("Opening database at: {}", db_path.display());
 
@@ -1003,26 +962,21 @@ fn main() {
                 })
                 .expect("Failed to open database");
 
-            // Initialize database schema
             info!("Initializing database schema");
             db_handler::init_database(&conn).expect("Failed to initialize database schema");
 
-            // Run auth migration (seed roles and admin user)
             info!("Running auth migration");
             if let Err(e) = db_handler::run_auth_migration(&conn) {
                 warn!("Auth migration failed: {}", e);
-                // Non-critical - continue without admin user
             }
 
             app.manage(AppState {
                 db: Mutex::new(conn),
             });
 
-            // Initialize session store for authentication
             let sessions: SessionStore = Mutex::new(HashMap::new());
             app.manage(sessions);
 
-            // Diagnostic logging for Issue #7 (window creation)
             if let Some(main_window) = app.get_webview_window("main") {
                 info!("[STARTUP] Main window created with label: 'main'");
                 if let Ok(monitor) = main_window.primary_monitor() {

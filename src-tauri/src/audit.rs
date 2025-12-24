@@ -1,8 +1,3 @@
-// ============================================================================
-// Audit Logging Module
-// Feature: 001-rbac-audit-system
-// ============================================================================
-
 use chrono::Local;
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
@@ -28,8 +23,6 @@ pub fn compute_diff(old_val: &Value, new_val: &Value) -> Value {
     Value::Array(diffs)
 }
 
-/// Create an audit log entry in the main audit_logs table
-/// Note: Audit write failures are logged but do NOT block primary operations
 pub fn create_audit_log_entry(
     conn: &Connection,
     user_id: &str,
@@ -73,7 +66,6 @@ pub fn create_audit_log_entry(
     match result {
         Ok(_) => Ok(()),
         Err(e) => {
-            // Log error but don't propagate - audit failures should not block business logic
             error!(
                 "Failed to create audit log entry: {} - action: {}, user: {}",
                 e, action_type, user_id

@@ -1,19 +1,12 @@
-// ============================================================================
-// Authentication Store
-// Feature: 001-rbac-audit-system
-// ============================================================================
-
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useDataStore } from './data'
 
 export const useAuthStore = defineStore('auth', () => {
-  // State
   const currentUser = ref(null)
   const sessionId = ref(null)
 
-  // Computed properties
   const isAuthenticated = computed(() => {
     return currentUser.value !== null && sessionId.value !== null
   })
@@ -26,7 +19,6 @@ export const useAuthStore = defineStore('auth', () => {
     return currentUser.value?.role === 'Teacher' || currentUser.value?.role_id === '00000000-0000-0000-0000-000000000002'
   })
 
-  // Actions
   async function login(username, password) {
     try {
       const result = await invoke('authenticate_user', { username, password })
@@ -52,7 +44,6 @@ export const useAuthStore = defineStore('auth', () => {
       console.error('Logout error:', error)
     } finally {
       dataStore.resetState();
-      // Clear session regardless of server response
       currentUser.value = null
       sessionId.value = null
       localStorage.removeItem('session_id')
@@ -76,16 +67,13 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    // State
     currentUser,
     sessionId,
 
-    // Computed
     isAuthenticated,
     isScheduler,
     isTeacher,
 
-    // Actions
     login,
     logout,
     restoreSession

@@ -50,7 +50,6 @@ pub async fn import_json(
         teacher_count, course_count, schedule_count
     );
 
-    // Write to temp tables (not main tables - user reviews then commits)
     let db = state.db.lock().map_err(|e| {
         error!("Failed to acquire database lock: {}", e);
         format!("Failed to acquire database lock: {}", e)
@@ -61,7 +60,6 @@ pub async fn import_json(
         format!("Failed to begin transaction: {}", e)
     })?;
 
-    // Write to temp tables only
     write_all_data_to_tables(&tx, &all_data, true)?;
 
     tx.commit().map_err(|e| {
@@ -94,7 +92,6 @@ pub async fn import_json(
     })
 }
 
-/// Import data from another SQLite database file to temp tables
 #[tauri::command]
 pub async fn import_database(
     file_path: String,
@@ -104,13 +101,11 @@ pub async fn import_database(
 ) -> CommandResult<ImportStats> {
     info!("Importing database from: {}", file_path);
 
-    // Open source database connection
     let source_conn = Connection::open(&file_path).map_err(|e| {
         error!("Failed to open source database: {}", e);
         format!("Failed to open source database: {}", e)
     })?;
 
-    // Validate schema - check that all required tables exist
     let tables_to_check = [
         "time_slots",
         "days",
@@ -145,7 +140,6 @@ pub async fn import_database(
 
     info!("Source database schema validated");
 
-    // Read all data from source database main tables and convert to AllData
     let all_data = load_all_data_from_connection(&source_conn, false, false)?;
 
     let teacher_count = all_data.teachers.len();
@@ -157,7 +151,6 @@ pub async fn import_database(
         teacher_count, course_count, schedule_count
     );
 
-    // Write to current database temp tables
     let db = state.db.lock().map_err(|e| {
         error!("Failed to acquire database lock: {}", e);
         format!("Failed to acquire database lock: {}", e)
@@ -168,7 +161,6 @@ pub async fn import_database(
         format!("Failed to begin transaction: {}", e)
     })?;
 
-    // Write to temp tables only
     write_all_data_to_tables(&tx, &all_data, true)?;
 
     tx.commit().map_err(|e| {
@@ -178,7 +170,6 @@ pub async fn import_database(
 
     info!("Database imported successfully to temp tables");
 
-    // Create audit log for database import
     if let Ok(sessions_lock) = sessions.lock() {
         if let Some(uid) = sessions_lock.get(&session_id).map(|u| u.id.clone()) {
             let change_details = serde_json::json!({
@@ -210,7 +201,6 @@ pub async fn import_database(
     })
 }
 
-/// Export current main tables to a new SQLite database file
 #[tauri::command]
 pub async fn export_database(
     file_path: String,
@@ -220,13 +210,11 @@ pub async fn export_database(
 ) -> CommandResult<()> {
     info!("Exporting database to: {}", file_path);
 
-    // Create new database file
     let target_conn = Connection::open(&file_path).map_err(|e| {
         error!("Failed to create target database: {}", e);
         format!("Failed to create target database: {}", e)
     })?;
 
-    // Initialize schema in target database
     let schema_sql = include_str!("../schema.sql");
     target_conn.execute_batch(schema_sql).map_err(|e| {
         error!("Failed to initialize target schema: {}", e);
@@ -235,7 +223,6 @@ pub async fn export_database(
 
     info!("Target database schema initialized");
 
-    // Load data from current main tables
     let db = state.db.lock().map_err(|e| {
         error!("Failed to acquire database lock: {}", e);
         format!("Failed to acquire database lock: {}", e)
@@ -249,7 +236,6 @@ pub async fn export_database(
         all_data.courses.len()
     );
 
-    // Write to target database main tables
     let tx = target_conn.unchecked_transaction().map_err(|e| {
         error!("Failed to begin target transaction: {}", e);
         format!("Failed to begin target transaction: {}", e)
@@ -264,7 +250,6 @@ pub async fn export_database(
 
     info!("Database exported successfully to: {}", file_path);
 
-    // Create audit log for database export
     if let Ok(sessions_lock) = sessions.lock() {
         if let Some(uid) = sessions_lock.get(&session_id).map(|u| u.id.clone()) {
             let change_details = serde_json::json!({
@@ -292,7 +277,6 @@ pub async fn export_database(
     Ok(())
 }
 
-/// Export current temp tables to JSON file (working state)
 #[tauri::command]
 pub async fn export_json(
     file_path: String,
@@ -302,7 +286,6 @@ pub async fn export_json(
 ) -> CommandResult<()> {
     info!("Exporting JSON to: {}", file_path);
 
-    // Load current state from temp tables
     let db = state.db.lock().map_err(|e| {
         error!("Failed to acquire database lock: {}", e);
         format!("Failed to acquire database lock: {}", e)
@@ -316,13 +299,11 @@ pub async fn export_json(
         all_data.courses.len()
     );
 
-    // Serialize to JSON with pretty formatting
     let json_content = serde_json::to_string_pretty(&all_data).map_err(|e| {
         error!("Failed to serialize data: {}", e);
         format!("Failed to serialize data: {}", e)
     })?;
 
-    // Write to file
     std::fs::write(&file_path, json_content).map_err(|e| {
         error!("Failed to write JSON file: {}", e);
         format!("Failed to write JSON file: {}", e)
@@ -330,7 +311,6 @@ pub async fn export_json(
 
     info!("JSON exported successfully to: {}", file_path);
 
-    // Create audit log for JSON export
     if let Ok(sessions_lock) = sessions.lock() {
         if let Some(uid) = sessions_lock.get(&session_id).map(|u| u.id.clone()) {
             let change_details = serde_json::json!({

@@ -16,10 +16,8 @@ pub struct AppState {
 
 pub fn init_database(conn: &Connection) -> SqlResult<()> {
     info!("Initializing database schema");
-    // Enable foreign key constraints
     conn.execute("PRAGMA foreign_keys = ON", [])?;
 
-    // Execute schema SQL (embedded at compile time)
     let schema_sql = include_str!("../schema.sql");
     conn.execute_batch(schema_sql)?;
 
@@ -30,7 +28,6 @@ pub fn init_database(conn: &Connection) -> SqlResult<()> {
 pub fn run_auth_migration(conn: &Connection) -> CommandResult<()> {
     info!("Running auth migration - seeding roles and admin user");
 
-    // Check if roles already exist
     let roles_exist: i64 = conn
         .query_row("SELECT COUNT(*) FROM roles", [], |row| row.get(0))
         .map_err(|e| format!("Failed to check roles: {}", e))?;
@@ -40,7 +37,6 @@ pub fn run_auth_migration(conn: &Connection) -> CommandResult<()> {
         return Ok(());
     }
 
-    // Seed roles
     let scheduler_role_id = "00000000-0000-0000-0000-000000000001";
     let teacher_role_id = "00000000-0000-0000-0000-000000000002";
 
@@ -66,7 +62,6 @@ pub fn run_auth_migration(conn: &Connection) -> CommandResult<()> {
 
     info!("Roles seeded successfully");
 
-    // Create default admin user
     let admin_id = Uuid::new_v4().to_string();
     let admin_password_hash =
         hash_password("123456").map_err(|e| format!("Failed to hash admin password: {}", e))?;
@@ -89,7 +84,6 @@ pub fn run_auth_migration(conn: &Connection) -> CommandResult<()> {
     Ok(())
 }
 
-/// Get the Teacher role ID from the main roles table
 pub fn get_teacher_role_id(conn: &Connection) -> Result<String, String> {
     let role_id: String = conn
         .query_row("SELECT id FROM roles WHERE name = 'Teacher'", [], |row| {
@@ -100,8 +94,6 @@ pub fn get_teacher_role_id(conn: &Connection) -> Result<String, String> {
     Ok(role_id)
 }
 
-/// Automatically create a user account for a teacher
-/// Returns true if user was created, false if user already exists
 pub fn auto_create_user_for_teacher(
     conn: &Connection,
     teacher_id: &str,
@@ -111,7 +103,6 @@ pub fn auto_create_user_for_teacher(
     use crate::audit::create_audit_log_entry;
     use crate::auth::{generate_unique_username, hash_password};
 
-    // Check if user already exists for this teacher
     let existing_user: Result<i64, _> = conn.query_row(
         "SELECT COUNT(*) FROM users WHERE teacher_id = ?1",
         params![teacher_id],
@@ -125,13 +116,10 @@ pub fn auto_create_user_for_teacher(
         }
     }
 
-    // Generate unique username
     let username = generate_unique_username(teacher_name, conn)?;
 
-    // Get Teacher role ID
     let role_id = get_teacher_role_id(conn)?;
 
-    // Hash default password "123456"
     let password_hash =
         hash_password("123456").map_err(|e| format!("Failed to hash password: {}", e))?;
 
@@ -144,8 +132,6 @@ pub fn auto_create_user_for_teacher(
         params![user_id, username, password_hash, role_id, teacher_id, created_at],
     ).map_err(|e| format!("Failed to create user: {}", e))?;
 
-    // Create audit log entry
-    // Note: Using a system user ID for automated actions
     let initiator_id = performer_id.unwrap_or("00000000-0000-0000-0000-000000000000");
     let _ = create_audit_log_entry(
         conn,
@@ -211,7 +197,6 @@ pub async fn save_temp_data(
         format!("Failed to begin transaction: {}", e)
     })?;
 
-    // Clear and write to temp tables
     match write_all_data_to_tables(&tx, &content, true) {
         Ok(_) => {}
         Err(e) => {
@@ -238,7 +223,6 @@ pub async fn commit_data(
 ) -> CommandResult<()> {
     info!("Committing temp data to main tables");
 
-    // Get user ID from session for audit logging
     let user_id = {
         let sessions_lock = sessions
             .lock()
@@ -315,7 +299,6 @@ pub async fn commit_data(
 
     info!("Data committed successfully");
 
-    // Create audit log for commit operation (Feature: 001-rbac-audit-system - User Story 6)
     if let Some(uid) = user_id {
         let _ = crate::audit::create_audit_log_entry(
             &db,
@@ -336,7 +319,6 @@ pub async fn commit_data(
     Ok(())
 }
 
-/// Clear all temporary changes (revert operation)
 #[tauri::command]
 pub async fn clear_temp_data(
     state: State<'_, AppState>,
@@ -363,12 +345,6 @@ pub async fn clear_temp_data(
     Ok(())
 }
 
-// ============================================================================
-// DATABASE OPERATIONS - LOAD
-// ============================================================================
-
-/// Load AllData from database, prioritizing temp tables
-/// Public function for use by import_export module
 pub fn load_all_data_from_connection(
     conn: &Connection,
     use_temp: bool,
@@ -405,9 +381,7 @@ pub async fn list_committed_teachers(state: State<'_, AppState>) -> CommandResul
     load_teachers(&db, false)
 }
 
-/// Load AllData from database, prioritizing temp tables (internal function)
 fn load_all_data(conn: &Connection) -> CommandResult<AllData> {
-    // Check if temp tables have data
     let has_temp_data: bool = conn
         .query_row("SELECT EXISTS(SELECT 1 FROM time_slots_temp)", [], |row| {
             row.get(0)
@@ -704,7 +678,6 @@ fn load_schedule_density(conn: &Connection, use_temp: bool) -> CommandResult<Vec
     schedule_density.map_err(|e| format!("Failed to load schedule_density: {}", e))
 }
 
-/// Load roles from database (always from main table - roles are static)
 fn load_roles(conn: &Connection) -> CommandResult<Vec<Role>> {
     let mut stmt = conn
         .prepare("SELECT id, name, description FROM roles")
@@ -724,7 +697,6 @@ fn load_roles(conn: &Connection) -> CommandResult<Vec<Role>> {
         .map_err(|e| format!("Failed to collect roles: {}", e))
 }
 
-/// Load users from database (Feature: 001-rbac-audit-system)
 fn load_users(conn: &Connection) -> CommandResult<Vec<User>> {
     let mut stmt = conn
         .prepare("SELECT id, username, password_hash, role_id, teacher_id, created_at, last_login FROM users")
@@ -748,13 +720,6 @@ fn load_users(conn: &Connection) -> CommandResult<Vec<User>> {
         .map_err(|e| format!("Failed to collect users: {}", e))
 }
 
-// ============================================================================
-// DATABASE OPERATIONS - WRITE
-// ============================================================================
-
-/// Write AllData to database tables (either main or temp)
-/// Write all data to database tables (main or temp)
-/// Public function for use by import_export module
 pub fn write_all_data_to_tables(
     tx: &Transaction,
     data: &AllData,
@@ -762,10 +727,8 @@ pub fn write_all_data_to_tables(
 ) -> CommandResult<()> {
     let suffix = if is_temp { "_temp" } else { "" };
 
-    // Clear all tables first (in reverse order to respect foreign keys)
     clear_tables(tx, is_temp)?;
 
-    // Insert time slots
     let time_table = format!("time_slots{}", suffix);
     for slot in &data.time {
         tx.execute(
@@ -778,7 +741,6 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert time slot: {}", e))?;
     }
 
-    // Insert days
     let day_table = format!("days{}", suffix);
     for day in &data.day {
         tx.execute(
@@ -788,7 +750,6 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert day: {}", e))?;
     }
 
-    // Insert campuses
     let campus_table = format!("campuses{}", suffix);
     for campus in &data.campuses {
         tx.execute(
@@ -798,7 +759,6 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert campus: {}", e))?;
     }
 
-    // Insert venues
     let venue_table = format!("venues{}", suffix);
     for venue in &data.venues {
         tx.execute(
@@ -811,7 +771,6 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert venue: {}", e))?;
     }
 
-    // Insert courses
     let course_table = format!("courses{}", suffix);
     for course in &data.courses {
         tx.execute(
@@ -821,7 +780,6 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert course: {}", e))?;
     }
 
-    // Insert course venues
     let course_venue_table = format!("course_venues{}", suffix);
     for cv in &data.course_venues {
         tx.execute(
@@ -834,7 +792,6 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert course venue: {}", e))?;
     }
 
-    // Insert teachers
     let teacher_table = format!("teachers{}", suffix);
     for teacher in &data.teachers {
         tx.execute(
@@ -852,7 +809,6 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert teacher: {}", e))?;
     }
 
-    // Insert teacher courses
     let teacher_course_table = format!("teacher_courses{}", suffix);
     for tc in &data.teacher_courses {
         tx.execute(
@@ -865,7 +821,6 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert teacher course: {}", e))?;
     }
 
-    // Insert teacher unavailability
     let unavail_table = format!("teacher_unavailability{}", suffix);
     for unavail in &data.teacher_unavailability {
         tx.execute(
@@ -878,7 +833,6 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert unavailability: {}", e))?;
     }
 
-    // Insert scheduled classes
     let scheduled_table = format!("scheduled_classes{}", suffix);
     for scheduled in &data.scheduled_classes {
         tx.execute(
@@ -899,7 +853,6 @@ pub fn write_all_data_to_tables(
         .map_err(|e| format!("Failed to insert scheduled class: {}", e))?;
     }
 
-    // Insert schedule density
     let density_table = format!("schedule_density{}", suffix);
     for density in &data.schedule_density {
         tx.execute(
@@ -920,11 +873,9 @@ pub fn write_all_data_to_tables(
     Ok(())
 }
 
-/// Clear all tables (either main or temp) in reverse order to respect foreign keys
 fn clear_tables(tx: &Transaction, is_temp: bool) -> CommandResult<()> {
     let suffix = if is_temp { "_temp" } else { "" };
 
-    // Delete in reverse order to respect foreign key constraints
     let tables = [
         format!("scheduled_classes{}", suffix),
         format!("teacher_unavailability{}", suffix),
@@ -947,7 +898,6 @@ fn clear_tables(tx: &Transaction, is_temp: bool) -> CommandResult<()> {
     Ok(())
 }
 
-/// Commit temp tables to main tables
 fn commit_temp_to_main(tx: &Transaction) -> CommandResult<()> {
     info!("Starting safe commit sync");
 
@@ -1062,8 +1012,6 @@ fn commit_temp_to_main(tx: &Transaction) -> CommandResult<()> {
     Ok(())
 }
 
-/// Truncate all temp tables (delete all rows but keep table structure)
-/// Called after commit to ensure temp tables are empty
 fn truncate_all_temp_tables(tx: &Transaction) -> CommandResult<()> {
     let temp_tables = [
         "scheduled_classes_temp",
@@ -1091,7 +1039,6 @@ fn truncate_all_temp_tables(tx: &Transaction) -> CommandResult<()> {
     Ok(())
 }
 
-/// Clear all temp tables
 fn clear_all_temp_tables(conn: &Connection, user_id: Option<&str>) -> CommandResult<()> {
     let temp_tables = [
         "scheduled_classes_temp",
@@ -1113,7 +1060,6 @@ fn clear_all_temp_tables(conn: &Connection, user_id: Option<&str>) -> CommandRes
             .map_err(|e| format!("Failed to clear temp table {}: {}", table, e))?;
     }
 
-    // Create audit log for revert operation (Feature: 001-rbac-audit-system - User Story 6)
     if let Some(uid) = user_id {
         let details = json!({
             "target_name": "批量撤销",
@@ -1137,7 +1083,6 @@ fn clear_all_temp_tables(conn: &Connection, user_id: Option<&str>) -> CommandRes
     Ok(())
 }
 
-/// List all users with their roles and associated teachers (Feature: 001-rbac-audit-system - User Story 4)
 pub fn list_users(conn: &Connection) -> Result<Vec<serde_json::Value>, String> {
     let mut stmt = conn
         .prepare(
@@ -1170,7 +1115,6 @@ pub fn list_users(conn: &Connection) -> Result<Vec<serde_json::Value>, String> {
     users
 }
 
-/// Create a new user manually (Feature: 001-rbac-audit-system - User Story 4)
 pub fn create_user(
     conn: &Connection,
     username: &str,
@@ -1181,7 +1125,6 @@ pub fn create_user(
 ) -> Result<String, String> {
     use uuid::Uuid;
 
-    // Check if username already exists in both main and temp tables
     let exists: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?1)",
@@ -1194,7 +1137,6 @@ pub fn create_user(
         return Err(format!("Username '{}' already exists", username));
     }
 
-    // Validate role exists
     let role_exists: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM roles WHERE id = ?1)",
@@ -1207,7 +1149,6 @@ pub fn create_user(
         return Err("Role not found".to_string());
     }
 
-    // Validate teacher exists if provided
     if let Some(tid) = teacher_id {
         let teacher_exists: bool = conn
             .query_row(
@@ -1385,7 +1326,6 @@ pub fn reset_password(
     )
     .map_err(|e| format!("Failed to reset password: {}", e))?;
 
-    // Create audit log
     let _ = crate::audit::create_audit_log_entry(
         conn,
         admin_user_id,
@@ -1400,7 +1340,6 @@ pub fn reset_password(
     Ok(())
 }
 
-/// Delete user account (Feature: 001-rbac-audit-system - User Story 4)
 pub fn delete_user(conn: &Connection, user_id: &str, current_user_id: &str) -> Result<(), String> {
     let target_username: String = conn
         .query_row(
@@ -1455,7 +1394,6 @@ pub fn delete_user(conn: &Connection, user_id: &str, current_user_id: &str) -> R
     Ok(())
 }
 
-/// Change own password (Feature: 001-rbac-audit-system - User Story 5)
 pub fn change_own_password(
     conn: &Connection,
     user_id: &str,
@@ -1464,7 +1402,6 @@ pub fn change_own_password(
 ) -> Result<(), String> {
     use crate::auth::verify_password;
 
-    // Get current password hash
     let current_hash: String = conn
         .query_row(
             "SELECT password_hash FROM users WHERE id = ?1",
@@ -1473,11 +1410,8 @@ pub fn change_own_password(
         )
         .map_err(|_| format!("User not found"))?;
 
-    // Verify old password
     match verify_password(old_password, &current_hash) {
-        Ok(true) => {
-            // Password correct, proceed with update
-        }
+        Ok(true) => {}
         Ok(false) => {
             return Err("Current password is incorrect".to_string());
         }
@@ -1492,7 +1426,6 @@ pub fn change_own_password(
     )
     .map_err(|e| format!("Failed to update password: {}", e))?;
 
-    // Create audit log
     if let Err(e) = crate::audit::create_audit_log_entry(
         conn,
         user_id,
@@ -1509,7 +1442,6 @@ pub fn change_own_password(
     Ok(())
 }
 
-/// Query audit logs with pagination and filters (Feature: 001-rbac-audit-system Phase 9)
 pub fn query_audit_logs(
     conn: &Connection,
     page: usize,
@@ -1523,7 +1455,6 @@ pub fn query_audit_logs(
 
     info!("Parsed Filters: {:?}", filters);
 
-    // Build WHERE clause based on filters
     let mut where_clauses = Vec::new();
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
@@ -1558,7 +1489,6 @@ pub fn query_audit_logs(
         format!("WHERE {}", where_clauses.join(" AND "))
     };
 
-    // Count total entries
     let count_sql = format!(
         "SELECT COUNT(*) FROM audit_logs al LEFT JOIN users u ON al.user_id = u.id {}",
         where_sql
@@ -1577,7 +1507,6 @@ pub fn query_audit_logs(
     let total_pages = (total_entries + per_page - 1) / per_page;
     let offset = (page - 1) * per_page;
 
-    // Query entries with pagination
     let query_sql = format!(
         "SELECT al.id, al.user_id, COALESCE(u.username, '已删除用户'), al.action_type, al.target_table, \
          al.target_id, al.timestamp, al.change_details, al.ip_address \
@@ -1593,7 +1522,6 @@ pub fn query_audit_logs(
         .prepare(&query_sql)
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
-    // Add LIMIT and OFFSET to params
     params_vec.push(Box::new(per_page as i64));
     params_vec.push(Box::new(offset as i64));
     let params: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();

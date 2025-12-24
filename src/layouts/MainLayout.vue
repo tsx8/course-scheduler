@@ -23,7 +23,6 @@
                         </n-button>
                     </n-space>
 
-                    <!-- Window controls -->
                     <n-button-group>
                         <n-button quaternary size="small" @click="minimizeWindow" title="最小化">
                             <template #icon><n-icon :component="MinimizeIcon" /></template>
@@ -147,7 +146,7 @@ const menuOptions = computed(() => {
             label: '校区总课表',
             key: 'CampusTimetable',
             icon: renderIcon(CalendarIcon),
-            show: authStore.isScheduler, // Only show to Schedulers
+            show: authStore.isScheduler,
         },
         {
             label: '教师个人课表',
@@ -156,7 +155,6 @@ const menuOptions = computed(() => {
         },
     ];
 
-    // Add divider and management options only for Schedulers
     if (authStore.isScheduler) {
         options.push(
             {

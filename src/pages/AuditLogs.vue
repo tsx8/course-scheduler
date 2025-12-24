@@ -66,7 +66,6 @@ const filterDateRange = ref(null);
 const showDetailModal = ref(false);
 const currentDetailJson = ref('');
 
-// Action type options (matching backend enum)
 const actionTypeOptions = [
     { label: '用户登录', value: 'LOGIN' },
     { label: '用户登出', value: 'LOGOUT' },
@@ -99,7 +98,6 @@ const actionTypeOptions = [
     { label: '工作日变更', value: 'DAY_MODIFIED' },
 ];
 
-// Table columns
 const columns = [
     {
         title: '时间',
@@ -131,7 +129,6 @@ const columns = [
             const option = actionTypeOptions.find(opt => opt.value === row.action_type);
             const label = option ? option.label : row.action_type;
 
-            // Color mapping for different action types
             let type = 'default';
             if (row.action_type.includes('LOGIN')) type = 'success';
             else if (row.action_type.includes('DELETE')) type = 'error';

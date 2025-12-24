@@ -1,13 +1,4 @@
--- SQLite Database Schema for Course Scheduler
--- Feature: 001-sqlite-migration
--- This file contains all table definitions for main and temp tables
-
--- Enable foreign key constraints
 PRAGMA foreign_keys = ON;
-
--- ============================================================================
--- MAIN TABLES (Committed State)
--- ============================================================================
 
 CREATE TABLE IF NOT EXISTS time_slots (
     id TEXT PRIMARY KEY,
@@ -98,18 +89,12 @@ CREATE TABLE IF NOT EXISTS schedule_density (
     FOREIGN KEY (time_id) REFERENCES time_slots(id) ON DELETE CASCADE
 );
 
--- ============================================================================
--- RBAC AND AUDIT SYSTEM TABLES (Feature: 001-rbac-audit-system)
--- ============================================================================
-
--- Roles: Define user role types (main only - static seed data)
 CREATE TABLE IF NOT EXISTS roles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     description TEXT
 );
 
--- Users: Authentication and authorization (dual-table pattern)
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
@@ -122,7 +107,6 @@ CREATE TABLE IF NOT EXISTS users (
     FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE SET NULL
 );
 
--- Audit Logs: System activity tracking (main table only - append-only)
 CREATE TABLE IF NOT EXISTS audit_logs (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -134,10 +118,6 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     ip_address TEXT,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
-
--- ============================================================================
--- TEMP TABLES (Working State - Identical Structure)
--- ============================================================================
 
 CREATE TABLE IF NOT EXISTS time_slots_temp (
     id TEXT PRIMARY KEY,
@@ -240,11 +220,6 @@ CREATE TABLE IF NOT EXISTS audit_logs_temp (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
--- ============================================================================
--- PERFORMANCE INDEXES
--- ============================================================================
-
--- Main table indexes
 CREATE INDEX IF NOT EXISTS idx_venues_campus_id ON venues(campus_id);
 CREATE INDEX IF NOT EXISTS idx_course_venues_course_id ON course_venues(course_id);
 CREATE INDEX IF NOT EXISTS idx_course_venues_venue_id ON course_venues(venue_id);
@@ -256,7 +231,6 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_classes_venue_id ON scheduled_classes(v
 CREATE INDEX IF NOT EXISTS idx_teacher_unavailability_teacher_id ON teacher_unavailability(teacher_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_density_campus_id ON schedule_density(campus_id);
 
--- Temp table indexes
 CREATE INDEX IF NOT EXISTS idx_venues_temp_campus_id ON venues_temp(campus_id);
 CREATE INDEX IF NOT EXISTS idx_course_venues_temp_course_id ON course_venues_temp(course_id);
 CREATE INDEX IF NOT EXISTS idx_course_venues_temp_venue_id ON course_venues_temp(venue_id);
@@ -268,7 +242,6 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_classes_temp_venue_id ON scheduled_clas
 CREATE INDEX IF NOT EXISTS idx_teacher_unavailability_temp_teacher_id ON teacher_unavailability_temp(teacher_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_density_temp_campus_id ON schedule_density_temp(campus_id);
 
--- RBAC and Audit system indexes
 CREATE INDEX IF NOT EXISTS idx_roles_name ON roles(name);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role_id);

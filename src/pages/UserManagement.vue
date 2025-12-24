@@ -43,7 +43,6 @@ const pagination = reactive({
 const users = ref([]);
 const loading = ref(false);
 
-// Create user modal
 const showCreateModal = ref(false);
 const createForm = ref({
     username: '',
@@ -52,7 +51,6 @@ const createForm = ref({
     teacher_id: null
 });
 
-// Edit role modal
 const showEditModal = ref(false);
 const editForm = ref({
     user_id: '',
@@ -61,7 +59,6 @@ const editForm = ref({
     teacher_id: null
 });
 
-// Reset password modal
 const showResetPasswordModal = ref(false);
 const resetPasswordForm = ref({
     user_id: '',
@@ -69,7 +66,6 @@ const resetPasswordForm = ref({
     new_password: ''
 });
 
-// Role options from data store
 const roleOptions = computed(() => {
     return dataStore.roles.map(role => ({
         label: role.name,
@@ -77,7 +73,6 @@ const roleOptions = computed(() => {
     }));
 });
 
-// Teacher options (only for Teacher role)
 const teacherOptions = computed(() => {
     return [
         { label: '(无)', value: null },
@@ -88,7 +83,6 @@ const teacherOptions = computed(() => {
     ];
 });
 
-// Load users from backend
 const loadUsers = async () => {
     loading.value = true;
     try {
@@ -102,7 +96,6 @@ const loadUsers = async () => {
     }
 };
 
-// Create user
 const handleCreateUser = async () => {
     if (!createForm.value.username || !createForm.value.password || !createForm.value.role_id) {
         message.warning('请填写所有必填字段');
@@ -121,7 +114,6 @@ const handleCreateUser = async () => {
         message.success('用户创建成功');
         showCreateModal.value = false;
 
-        // Reset form
         createForm.value = {
             username: '',
             password: '',
@@ -129,7 +121,6 @@ const handleCreateUser = async () => {
             teacher_id: null
         };
 
-        // Reload users
         await loadUsers();
     } catch (error) {
         console.error('Failed to create user:', error);
@@ -137,7 +128,6 @@ const handleCreateUser = async () => {
     }
 };
 
-// Open edit modal
 const openEditModal = (user) => {
     editForm.value = {
         user_id: user.id,
@@ -148,7 +138,6 @@ const openEditModal = (user) => {
     showEditModal.value = true;
 };
 
-// Update user
 const handleUpdateUser = async () => {
     if (!editForm.value.role_id) {
         message.warning('角色不能为空');
@@ -172,7 +161,6 @@ const handleUpdateUser = async () => {
     }
 };
 
-// Open reset password modal
 const openResetPasswordModal = (user) => {
     resetPasswordForm.value = {
         user_id: user.id,
@@ -182,7 +170,6 @@ const openResetPasswordModal = (user) => {
     showResetPasswordModal.value = true;
 };
 
-// Reset password
 const handleResetPassword = async () => {
     if (!resetPasswordForm.value.new_password) {
         message.warning('请输入新密码');
@@ -199,7 +186,6 @@ const handleResetPassword = async () => {
         message.success('密码重置成功');
         showResetPasswordModal.value = false;
 
-        // Reset form
         resetPasswordForm.value = {
             user_id: '',
             username: '',
@@ -223,7 +209,6 @@ const confirmDeleteUser = (user) => {
     });
 };
 
-// Delete user
 const handleDeleteUser = async (userId) => {
     try {
         await invoke('delete_user', {
@@ -238,7 +223,6 @@ const handleDeleteUser = async (userId) => {
     }
 };
 
-// Table columns
 const columns = computed(() => [
     {
         title: '用户名',
@@ -296,24 +280,22 @@ const columns = computed(() => [
                     onClick: () => openResetPasswordModal(row)
                 }, {
                     icon: () => h(NIcon, { component: KeyIcon }),
-                    // default: () => '重置密码'
                 }),
 
                 h(NButton, {
                     size: 'small',
-                    type: 'info', // 统一使用 info 类型
+                    type: 'info',
                     onClick: () => openEditModal(row),
                     disabled: isCurrentUser
                 }, {
                     icon: () => h(NIcon, { component: EditIcon }),
-                    // default: () => '修改角色'
                 }),
 
                 h(NButton, {
                     size: 'small',
                     type: 'error',
                     disabled: isCurrentUser,
-                    onClick: () => confirmDeleteUser(row) // 调用新定义的确认函数
+                    onClick: () => confirmDeleteUser(row)
                 }, {
                     icon: () => h(NIcon, { component: DeleteIcon })
                 })
@@ -363,7 +345,6 @@ watch(showCreateModal, (val) => {
 
         </n-layout-content>
 
-        <!-- Create User Modal -->
         <n-modal v-model:show="showCreateModal" preset="dialog" title="创建用户" positive-text="创建" negative-text="取消"
             @positive-click="handleCreateUser">
             <n-form :model="createForm" label-placement="left" label-width="100">
@@ -384,7 +365,6 @@ watch(showCreateModal, (val) => {
             </n-form>
         </n-modal>
 
-        <!-- Edit Role Modal -->
         <n-modal v-model:show="showEditModal" preset="dialog" title="编辑用户信息" positive-text="保存更改" negative-text="取消"
             @positive-click="handleUpdateUser">
             <n-form :model="editForm" label-placement="left" label-width="100" style="margin-top: 16px;">
@@ -401,7 +381,6 @@ watch(showCreateModal, (val) => {
             </n-form>
         </n-modal>
 
-        <!-- Reset Password Modal -->
         <n-modal v-model:show="showResetPasswordModal" preset="dialog" title="重置密码" positive-text="重置"
             negative-text="取消" @positive-click="handleResetPassword">
             <n-form :model="resetPasswordForm" label-placement="left" label-width="100">
@@ -416,7 +395,3 @@ watch(showCreateModal, (val) => {
         </n-modal>
     </n-layout>
 </template>
-
-<style scoped>
-/* Add any custom styles here */
-</style>

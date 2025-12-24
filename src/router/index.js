@@ -72,7 +72,6 @@ const router = createRouter({
   routes
 });
 
-// Global navigation guard for authentication
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore();
 
@@ -84,21 +83,17 @@ router.beforeEach(async (to, from, next) => {
     }
   }
 
-  // Check if route requires authentication
   const requiresAuth = to.meta.requiresAuth !== false;
 
   if (requiresAuth && !authStore.isAuthenticated) {
-    // Redirect to login
     next('/login');
   } else if (to.path === '/login' && authStore.isAuthenticated) {
-    // Already logged in, redirect to appropriate page
     if (authStore.isScheduler) {
       next('/campus-timetable');
     } else {
       next('/teacher-timetable');
     }
   } else if (to.meta.requiresScheduler && !authStore.isScheduler) {
-    // Route requires Scheduler role, but user is not scheduler
     if (authStore.isTeacher) {
       next('/teacher-timetable');
     } else {

@@ -112,10 +112,6 @@ pub struct TeacherUnavailability {
     pub time_id: String,
 }
 
-// ============================================================================
-// RBAC and Audit System Models (Feature: 001-rbac-audit-system)
-// ============================================================================
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Role {
     pub id: String,
@@ -128,19 +124,18 @@ pub struct User {
     pub id: String,
     pub username: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub password_hash: Option<String>, // Skip serializing to frontend
+    pub password_hash: Option<String>,
     pub role_id: String,
     pub teacher_id: Option<String>,
     pub created_at: String,
     pub last_login: Option<String>,
 }
 
-/// Audit log entry with joined username for display
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AuditLogEntry {
     pub id: String,
     pub user_id: String,
-    pub username: String, // Joined from users table
+    pub username: String,
     pub action_type: String,
     pub target_table: Option<String>,
     pub target_id: Option<String>,
@@ -149,7 +144,6 @@ pub struct AuditLogEntry {
     pub ip_address: Option<String>,
 }
 
-/// Pagination information for audit log queries
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PaginationInfo {
@@ -161,7 +155,6 @@ pub struct PaginationInfo {
     pub has_prev: bool,
 }
 
-/// Response structure for list_audit_logs command
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditLogsResponse {
@@ -169,7 +162,6 @@ pub struct AuditLogsResponse {
     pub pagination: PaginationInfo,
 }
 
-/// Filter parameters for audit log queries
 #[derive(Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditLogFilters {
@@ -180,5 +172,4 @@ pub struct AuditLogFilters {
     pub target_table: Option<String>,
 }
 
-// Session store type alias for in-memory session management
 pub type SessionStore = Mutex<HashMap<String, User>>;

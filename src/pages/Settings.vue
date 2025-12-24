@@ -15,7 +15,6 @@ const dialog = useDialog();
 const dataStore = useDataStore();
 const authStore = useAuthStore();
 
-// Password change state
 const showPasswordModal = ref(false);
 const passwordForm = ref({
     oldPassword: '',
@@ -84,7 +83,6 @@ const handleExportData = async () => {
         });
 
         if (filePath) {
-            // Determine file type based on extension
             const isJson = filePath.toLowerCase().endsWith('.json');
 
             if (isJson) {
@@ -114,7 +112,6 @@ const handleImportData = async () => {
         });
 
         if (selectedPath) {
-            // Determine file type based on extension
             const isJson = selectedPath.toLowerCase().endsWith('.json');
 
             let stats;
@@ -126,7 +123,6 @@ const handleImportData = async () => {
                 message.success(`数据库已导入到临时区域！${stats.teachers}位教师，${stats.courses}门课程，${stats.schedules}个排课。请检查后点击"保存"提交。`);
             }
 
-            // Reload data to show imported data
             const reloadedData = await invoke('load_data');
             dataStore.replaceAllData(reloadedData);
         }
@@ -403,7 +399,6 @@ const handleDaySubmit = () => {
         </n-layout-content>
     </n-layout>
 
-    <!-- Password Change Modal -->
     <n-modal v-model:show="showPasswordModal" preset="dialog" title="修改密码" positive-text="确认修改" negative-text="取消"
         @positive-click="handlePasswordSubmit">
         <n-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-placement="left"

@@ -48,14 +48,12 @@ export const useDataStore = defineStore('data', () => {
     const isSolving = ref(false);
     const hasUnsavedChanges = ref(false);
 
-    // Normalized relationship arrays
     const courseVenues = ref([]);
     const teacherCourses = ref([]);
     const scheduledClasses = ref([]);
     const teacherUnavailability = ref([]);
     const scheduleDensity = ref([]);
 
-    // RBAC and Audit system arrays (Feature: 001-rbac-audit-system)
     const roles = ref([]);
     const users = ref([]);
 
@@ -209,11 +207,8 @@ export const useDataStore = defineStore('data', () => {
 
             console.log('Data initialized successfully.');
 
-            // Set up event listener for commit-completed (T027)
             listen('commit-completed', () => {
                 console.log('Commit completed event received');
-                // Reset dirty state - no unsaved changes after commit
-                // The watcher will handle any new changes automatically
             }).catch(err => {
                 console.error('Failed to set up commit-completed listener:', err);
             });
@@ -262,7 +257,6 @@ export const useDataStore = defineStore('data', () => {
         syncUnsavedStatus();
     };
 
-    // Computed properties for normalized data relationships
     const venuesByCampus = computed(() => (campusId) => {
         return venues.value.filter(v => v.campus_id === campusId);
     });
@@ -323,14 +317,12 @@ export const useDataStore = defineStore('data', () => {
         const newTeacher = { ...teacherData, id: newId };
         teachers.value.push(newTeacher);
 
-        // Handle teaches relationship
         if (teacherData.teaches && Array.isArray(teacherData.teaches)) {
             teacherData.teaches.forEach(courseId => {
                 teacherCourses.value.push({ teacher_id: newTeacher.id, course_id: courseId });
             });
         }
 
-        // Handle unavailable slots
         if (teacherData.unavailable && Array.isArray(teacherData.unavailable)) {
             teacherData.unavailable.forEach(slot => {
                 teacherUnavailability.value.push({
@@ -341,7 +333,6 @@ export const useDataStore = defineStore('data', () => {
             });
         }
 
-        // Handle scheduled classes
         if (teacherData.scheduled && Array.isArray(teacherData.scheduled)) {
             teacherData.scheduled.forEach(schedule => {
                 scheduledClasses.value.push({
@@ -395,7 +386,6 @@ export const useDataStore = defineStore('data', () => {
         const teacher = teachers.value.find(t => t.id === teacherId);
         const teacherName = teacher?.name || '未知教师';
         teachers.value = teachers.value.filter(t => t.id !== teacherId);
-        // Remove related data
         teacherCourses.value = teacherCourses.value.filter(tc => tc.teacher_id !== teacherId);
         teacherUnavailability.value = teacherUnavailability.value.filter(tu => tu.teacher_id !== teacherId);
         scheduledClasses.value = scheduledClasses.value.filter(sc => sc.teacher_id !== teacherId);
@@ -428,7 +418,6 @@ export const useDataStore = defineStore('data', () => {
         const newCourse = { ...courseData, id: newId };
         courses.value.push(newCourse);
 
-        // Handle place (venue) relationships
         if (courseData.place && Array.isArray(courseData.place)) {
             courseData.place.forEach(place => {
                 courseVenues.value.push({
