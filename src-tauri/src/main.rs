@@ -815,6 +815,7 @@ async fn run_solver(
             None,
             None,
             Some(serde_json::json!({
+                "target_name": "solver",
                 "status": "success",
                 "message": "自动排课完成"
             })),
