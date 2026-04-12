@@ -57,6 +57,7 @@ class DataManager:
         for teacher in self.teacher_list:
             teacher['teaches'] = []
             teacher['unavailable'] = []
+            teacher['campus_ids'] = []
 
         for tc in self.data.get('teacher_courses', []):
             t_id = tc['teacher_id']
@@ -71,6 +72,19 @@ class DataManager:
                     'day_id': tu['day_id'],
                     'time_id': tu['time_id']
                 })
+
+        for tc in self.data.get('teacher_campuses', []):
+            t_id = tc['teacher_id']
+            campus_id = tc['campus_id']
+            if t_id in self.teachers:
+                self.teachers[t_id]['campus_ids'].append(campus_id)
+
+        all_campus_ids = [campus['id'] for campus in self.campus_list]
+        for teacher in self.teacher_list:
+            if not teacher['campus_ids']:
+                teacher['campus_ids'] = all_campus_ids.copy()
+            else:
+                teacher['campus_ids'] = list(dict.fromkeys(teacher['campus_ids']))
 
         for course in self.course_list:
             course['place'] = []
@@ -87,10 +101,6 @@ class DataManager:
         self.existing_teacher_hours = {t_idx: 0 for t_idx in range(len(self.teacher_list))}
         self.existing_venue_usage = {}
         self.existing_teacher_day_campus = {}
-        self.teacher_has_existing_campus = {
-            t_idx: {c_idx: False for c_idx in range(len(self.campus_list))}
-            for t_idx in range(len(self.teacher_list))
-        }
         self.existing_teacher_day_time_busy = {}
         self.existing_work_days = {t_idx: set() for t_idx in range(len(self.teacher_list))}
         self.existing_teacher_day_class_count = {}
@@ -124,7 +134,6 @@ class DataManager:
             if (t_idx, d_idx) in self.existing_teacher_day_campus and self.existing_teacher_day_campus[(t_idx, d_idx)] != c_idx:
                 print(f"ERROR: Teacher {self.teacher_list[t_idx]['name']} has conflicting existing schedules on the same day across different campuses.")
             self.existing_teacher_day_campus[(t_idx, d_idx)] = c_idx
-            self.teacher_has_existing_campus[t_idx][c_idx] = True
             self.existing_teacher_day_time_busy[(t_idx, d_idx, i_idx)] = True
 
 def solve_scheduling(data_manager, x_init=None):
@@ -140,12 +149,16 @@ def solve_scheduling(data_manager, x_init=None):
     x_by_teacher_course_campus = defaultdict(list)
     
     for t_idx, teacher in enumerate(dm.teacher_list):
+        allowed_campus_ids = set(teacher.get('campus_ids', []))
         for course_id in teacher['teaches']:
             c_idx = dm.course_id_to_idx[course_id]
             course = dm.course_list[c_idx]
             for place in course['place']:
                 v_idx = dm.venue_id_to_idx[place['venue_id']]
                 campus_idx = dm.venue_idx_to_campus_idx[v_idx]
+                campus_id = dm.campus_list[campus_idx]['id']
+                if allowed_campus_ids and campus_id not in allowed_campus_ids:
+                    continue
                 for d_idx in range(len(dm.day_list)):
                     for i_idx in range(len(dm.time_list)):
                         key = (t_idx, c_idx, d_idx, i_idx, v_idx)
@@ -208,15 +221,6 @@ def solve_scheduling(data_manager, x_init=None):
                         for var, i_idx in x_by_teacher[t_idx])
         model.Add(new_hours + existing_hours <= teacher['max_teaching_hours'])
 
-    # "is_only_shahe" teachers can only teach at the Shahe campus.
-    for t_idx, teacher in enumerate(dm.teacher_list):
-        if teacher['is_only_shahe']:
-            shahe_campus_idx = dm.campus_id_to_idx['138697dc-1591-4c16-b60e-d0057964be56']
-            for key, var in x.items():
-                if key[0] == t_idx:
-                    venue_campus_idx = dm.venue_idx_to_campus_idx[key[4]]
-                    model.AddImplication(var, model.NewConstant(venue_campus_idx == shahe_campus_idx))
-
     # A teacher can only be at one campus on any given day.
     for t_idx in range(len(dm.teacher_list)):
         for d_idx in range(len(dm.day_list)):
@@ -232,20 +236,6 @@ def solve_scheduling(data_manager, x_init=None):
                 if key[0] == t_idx and key[2] == d_idx:
                     venue_campus_idx = dm.venue_idx_to_campus_idx[key[4]]
                     model.AddImplication(var, teacher_day_campus_vars[venue_campus_idx])
-
-    # Teachers not restricted to Shahe must teach at both campuses.
-    for t_idx, teacher in enumerate(dm.teacher_list):
-        if not teacher['is_only_shahe']:
-            teacher_teaches_at_campus = [model.NewBoolVar(f'teacher_{t_idx}_teaches_at_campus_{c_idx}') for c_idx in range(len(dm.campus_list))]
-            
-            for c_idx in range(len(dm.campus_list)):
-                has_existing = 1 if dm.teacher_has_existing_campus[t_idx][c_idx] else 0
-                new_vars_at_campus = [
-                    v for key, v in x.items()
-                    if key[0] == t_idx and dm.venue_idx_to_campus_idx[key[4]] == c_idx
-                ]
-                model.AddBoolOr([model.NewConstant(has_existing)] + new_vars_at_campus).OnlyEnforceIf(teacher_teaches_at_campus[c_idx])
-            model.Add(sum(teacher_teaches_at_campus) == len(dm.campus_list))
 
     # This dictionary will store the working day variables for each teacher,
     # to be reused by the soft constraint for workday concentration.
@@ -421,16 +411,19 @@ def solve_scheduling(data_manager, x_init=None):
     # Maximize the number of "teacher-course-campus" combinations offered.
     opened_course_options = []
     for t_idx, teacher in enumerate(dm.teacher_list):
-        campus_indices_to_check = range(len(dm.campus_list))
-        if teacher['is_only_shahe']:
-            shahe_campus_idx = dm.campus_id_to_idx['138697dc-1591-4c16-b60e-d0057964be56']
-            campus_indices_to_check = [shahe_campus_idx]
+        campus_indices_to_check = [
+            dm.campus_id_to_idx[campus_id]
+            for campus_id in teacher.get('campus_ids', [])
+            if campus_id in dm.campus_id_to_idx
+        ]
+        if not campus_indices_to_check:
+            campus_indices_to_check = list(range(len(dm.campus_list)))
 
         for course_id in teacher['teaches']:
             c_idx = dm.course_id_to_idx[course_id]
             for campus_idx in campus_indices_to_check:
                 vars_for_option = x_by_teacher_course_campus[(t_idx, c_idx, campus_idx)]
-                if not vars_for_option: 
+                if not vars_for_option:
                     continue
 
                 opens_course_at_campus = model.NewBoolVar(f'opens_t{t_idx}_c{c_idx}_k{campus_idx}')

@@ -7,9 +7,13 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Node / frontend
+/node_modules/
+/frontend/node_modules/
+/frontend/dist/
+/frontend/wailsjs/
+/dist/
+/dist-ssr/
 *.local
 
 # Editor directories and files
@@ -26,8 +30,14 @@ dist-ssr
 # Python
 __pycache__/
 *.py[oc]
+/.venv/
+/solver/.venv/
 solver/build/
 solver/dist/
 wheels/
 *.egg-info
-.venv/
+
+# Wails / local workspace artifacts
+build/bin/
+.ralph/
+prompt.md
