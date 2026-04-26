@@ -40,5 +40,7 @@ wheels/
 
 # Wails / local workspace artifacts
 build/bin/
+build/windows/installer/*
+!build/windows/installer/project.nsi
 .ralph/
 prompt.md

@@ -13,17 +13,6 @@
 - 导入导出：支持 JSON 与 SQLite 数据导入导出
 - Windows 桌面体验：Wails 原生宿主、自定义标题栏、sidecar 求解器、可打包发布
 
-## 当前实现说明
-
-当前仓库已经移除以下模块：
-
-- 登录与 RBAC
-- 用户管理
-- 审计日志
-- 运行日志系统
-
-当前应用为单一业务入口，不再区分排课员 / 教师权限视图。
-
 ## 技术栈
 
 ### 前端
@@ -70,10 +59,10 @@ wails dev
 生产构建：
 
 ```bash
-wails build
+wails build -nsis
 ```
 
-构建产物输出目录：`build/bin/`
+构建产物输出目录：`build/bin/`。CI 上传 `*-installer.exe` 安装包；安装包默认安装到当前用户目录 `%LOCALAPPDATA%\Programs\course-scheduler`。
 
 ## 使用流程
 
@@ -129,8 +118,12 @@ wails build
 course-scheduler/
 ├── build/
 │   ├── appicon.png
-│   ├── bin/
 │   └── windows/
+│       ├── icon.ico
+│       ├── info.json
+│       ├── wails.exe.manifest
+│       └── installer/
+│           └── project.nsi
 ├── frontend/
 │   ├── index.html
 │   ├── package.json
@@ -191,7 +184,6 @@ Windows 数据目录：
 - 数据库：`%APPDATA%\com.tsxb.course-scheduler\course_scheduler.db`
 - 求解器临时输入/输出：`%APPDATA%\com.tsxb.course-scheduler\solver_input.tmp.json`、`solver_output.tmp.json`
 - 解包后的求解器：`%APPDATA%\com.tsxb.course-scheduler\solver.exe`
-- 运行日志目录已移除；当前版本不再维护 `%APPDATA%\com.tsxb.course-scheduler\logs\`
 
 ### 3NF 设计
 
@@ -218,7 +210,7 @@ Windows 数据目录：
 uv --directory solver run pyinstaller solver.spec
 ```
 
-该命令会在 `solver/` 子项目中使用 `uv` 环境执行 PyInstaller，把 `solver/solver.py` 构建到 `solver/dist/solver.exe`，并由 Go/Wails 直接以该目录作为 sidecar 单一来源。`wails build` 会通过 `wails.json` 的 `preBuildHooks` 自动执行同一构建。
+该命令会在 `solver/` 子项目中使用 `uv` 环境执行 PyInstaller，把 `solver/solver.py` 构建到 `solver/dist/solver.exe`，并由 Go/Wails 直接以该目录作为 sidecar 单一来源。`wails build` 与 `wails build -nsis` 都会通过 `wails.json` 的 `preBuildHooks` 自动执行同一构建。
 
 ## 开发说明
 
@@ -229,7 +221,7 @@ npm --prefix frontend run build
 uv --directory solver run pyinstaller solver.spec
 go build ./...
 wails dev
-wails build
+wails build -nsis
 ```
 
 ### CI
@@ -242,7 +234,7 @@ uv --directory solver sync --frozen
 uv --directory solver run pyinstaller solver.spec
 npm --prefix frontend run build
 go build ./...
-wails build
+wails build -nsis
 ```
 
 ### 数据模型修改时需要同步更新
@@ -260,7 +252,7 @@ wails build
 - 前端改动后运行 `npm --prefix frontend run build`
 - 求解器 / 数据模型改动后运行 `uv --directory solver run pyinstaller solver.spec`
 - Go / Wails 改动后运行 `go build ./...`
-- 打包验证运行 `wails build`
+- 打包验证运行 `wails build -nsis`
 
 ## 许可证
 
