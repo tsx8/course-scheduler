@@ -36,6 +36,7 @@ func (a *App) RunSolver() (AllData, error) {
 	}
 
 	command := exec.Command(solverPath, inputPath, outputPath)
+	configureSolverCommand(command)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return AllData{}, fmt.Errorf("solver failed: %w\n%s", err, string(output))
