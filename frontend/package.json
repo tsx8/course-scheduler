@@ -8,7 +8,9 @@
     "dev:wails": "vite --mode wails",
     "build": "vite build",
     "build:wails": "vite build --mode wails",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@vicons/ionicons5": "^0.13.0",
@@ -20,6 +22,7 @@
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@vitejs/plugin-vue": "^5.2.1",
     "unplugin-auto-import": "^20.3.0",
     "unplugin-vue-components": "^30.0.0",
