@@ -1,8 +1,0 @@
-{
-  "name": "course-scheduler",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "build:solver": "cd solver && uv run pyinstaller solver.spec && node scripts/prepare-solver.js"
-  }
-}

@@ -93,13 +93,13 @@ func (a *App) resolveSolverPath() (string, error) {
 	}
 
 	if a.solverFS == nil {
-		return "", fmt.Errorf("solver binary missing; run npm run build:solver first")
+		return "", fmt.Errorf("solver binary missing; run uv --directory solver run pyinstaller solver.spec first")
 	}
 
 	embeddedPath := filepath.ToSlash(filepath.Join("solver", "dist", binaryName))
 	reader, err := a.solverFS.Open(embeddedPath)
 	if err != nil {
-		return "", fmt.Errorf("solver binary missing; run npm run build:solver first")
+		return "", fmt.Errorf("solver binary missing; run uv --directory solver run pyinstaller solver.spec first")
 	}
 	defer reader.Close()
 

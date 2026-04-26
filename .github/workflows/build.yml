@@ -13,7 +13,6 @@ on:
       - 'main.go'
       - 'go.mod'
       - 'go.sum'
-      - 'package.json'
       - 'wails.json'
   pull_request:
     paths:
@@ -25,7 +24,6 @@ on:
       - 'main.go'
       - 'go.mod'
       - 'go.sum'
-      - 'package.json'
       - 'wails.json'
   workflow_dispatch:
 
@@ -85,7 +83,7 @@ jobs:
         run: uv --directory solver sync --frozen
 
       - name: Build solver sidecar
-        run: npm run build:solver
+        run: uv --directory solver run pyinstaller solver.spec
 
       - name: Build frontend
         run: npm --prefix frontend run build

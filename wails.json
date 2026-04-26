@@ -6,6 +6,9 @@
   "frontend:build": "npm run build:wails",
   "frontend:dev:watcher": "npm run dev:wails",
   "frontend:dev:serverUrl": "auto",
+  "preBuildHooks": {
+    "windows/*": "uv --directory ../../solver run pyinstaller solver.spec"
+  },
   "author": {
     "name": "tsx8",
     "email": "tangsongxiaoba@163.com"

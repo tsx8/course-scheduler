@@ -37,7 +37,7 @@
 ```bash
 npm --prefix frontend install
 uv --directory solver sync
-npm run build:solver
+uv --directory solver run pyinstaller solver.spec
 npm --prefix frontend run build
 go build ./...
 wails dev
@@ -82,20 +82,18 @@ powershell -Command "echo $env:APPDATA"
 
 ### Go / Wails 后端
 - `main.go`：Wails 入口、窗口参数、资源绑定
-- `wails.json`：Wails 构建配置
+- `wails.json`：Wails 构建配置，包含 solver sidecar 的 `preBuildHooks`
 - `internal/backend/app.go`：应用生命周期、对话框、关闭拦截
 - `internal/backend/models.go`：`AllData` 契约与数据结构
 - `internal/backend/storage.go`：数据库初始化、load/save temp、commit/revert、兼容迁移、核心数据装载
 - `internal/backend/import_export.go`：JSON / SQLite 导入导出与旧数据兼容映射
 - `internal/backend/solver.go`：solver 调用链路与关闭收尾
 
-### 求解器与脚本
+### 求解器
 - `solver/solver.py`：排课模型；教师校区集合约束的核心实现点
 - `solver/solver.spec`：PyInstaller 配置
 - `solver/pyproject.toml`、`solver/uv.lock`、`solver/.python-version`：solver 子项目的 Python 依赖与版本元数据
 - `solver/dist/`：sidecar 单一产物来源；Go embed 与运行时磁盘探测都以此为准
-- `solver/scripts/prepare-solver.js`：校验 `solver/dist/solver.exe` 已就绪，并清理旧 `build/sidecar/` 残留
-- `package.json`：repo 级脚本入口；当前仅保留 `build:solver`
 - `.github/workflows/build.yml`：Windows CI；应保持与 `frontend/`、`solver/`、`wails.json` 和 `wails build` 链路一致
 
 ## 数据与代码模式
@@ -115,7 +113,7 @@ powershell -Command "echo $env:APPDATA"
 按改动范围选择最小验证：
 - 仅文档改动：无需构建
 - 前端页面 / 路由改动：`npm --prefix frontend run build`
-- 求解器 / 数据模型改动：`npm run build:solver`
+- 求解器 / 数据模型改动：`uv --directory solver run pyinstaller solver.spec`
 - Go / Wails / 打包改动：`go build ./...`、`wails build`
 - 涉及真实交互流：`wails dev`
 
@@ -162,5 +160,5 @@ powershell -Command "echo $env:APPDATA"
 - `internal/backend/models.go`、`internal/backend/storage.go`、`internal/backend/import_export.go` 是否与 `AllData` 契约一致
 - `internal/backend/storage.go`、`internal/backend/import_export.go` 是否仅在边界保留 `is_only_shahe` 兼容逻辑
 - `solver/solver.py` 是否仍按 `teacher_campuses` 集合约束建模
-- `solver/scripts/prepare-solver.js` 与 `solver/dist/` 是否仍与 Wails sidecar 链路一致
+- `solver/dist/` 是否仍与 Wails sidecar embed / 运行时探测链路一致
 - `README.md`、`AGENTS.md` 是否与实际仓库结构和运行方式一致
