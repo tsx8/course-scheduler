@@ -2,7 +2,7 @@
 import { ref, computed, h } from 'vue';
 import {
     NLayout, NLayoutHeader, NLayoutContent, NFlex, NH2, NButton, NCard, NText, useMessage, useDialog,
-    NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NIcon, NSpace, NDivider, NTooltip
+    NDataTable, NModal, NForm, NFormItem, NInput, NInputNumber, NIcon, NSpace, NTooltip
 } from 'naive-ui';
 import { AddOutline as AddIcon, CreateOutline as EditIcon, TrashOutline as DeleteIcon } from '@vicons/ionicons5';
 import { useDataStore } from '../stores/data';
@@ -273,9 +273,6 @@ const handleDaySubmit = () => {
                             </n-flex>
                         </div>
 
-                        <n-divider style="margin: 8px 0;" />
-
-                        <n-text depth="3">运行日志入口已移除。</n-text>
                     </n-flex>
                 </n-card>
             </n-flex>
