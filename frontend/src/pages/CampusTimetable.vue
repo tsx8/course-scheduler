@@ -180,6 +180,49 @@ const cellTarget = (dayId, timeId) => {
 const campusIssueKey = (target) => `${target.campus_id}-${target.day_id}-${target.time_id}`;
 const cellIssues = (target) => dataStore.issuesByCampusCell.get(campusIssueKey(target)) || [];
 const issueTouchesSchedules = (issue, scheduleIds) => issue.schedule_ids?.some(scheduleId => scheduleIds.has(scheduleId));
+const findScheduleById = (scheduleId) => dataStore.scheduledClasses.find(schedule => schedule.id === scheduleId) || null;
+const collectScheduleIds = (target = {}) => {
+    const ids = [
+        ...(Array.isArray(target.schedule_ids) ? target.schedule_ids : []),
+        target.schedule_id,
+        target.scheduleId,
+    ].filter(Boolean);
+    return [...new Set(ids)];
+};
+const focusScheduleIdSet = (focus) => new Set(collectScheduleIds(focus));
+const fieldMatches = (expected, actual) => !expected || expected === actual;
+const scheduleMatchesFocus = (schedule, focus) => {
+    if (!schedule || !focus) return false;
+    const scheduleIds = focusScheduleIdSet(focus);
+    if (scheduleIds.has(schedule.id)) return true;
+    if (focus.type && focus.type !== 'campus') return false;
+
+    const hasScheduleScope = Boolean(focus.teacher_id || focus.campus_id || focus.venue_id || focus.day_id || focus.time_id);
+    return hasScheduleScope
+        && fieldMatches(focus.teacher_id, schedule.teacher_id)
+        && fieldMatches(focus.campus_id, schedule.campus_id)
+        && fieldMatches(focus.venue_id, schedule.venue_id)
+        && fieldMatches(focus.day_id, schedule.day_id)
+        && fieldMatches(focus.time_id, schedule.time_id);
+};
+const targetHasFocusedSchedule = (target, focus) => {
+    const scheduleIds = focusScheduleIdSet(focus);
+    if (scheduleIds.size === 0 || !Array.isArray(target.schedule_ids)) return false;
+    return target.schedule_ids.some(scheduleId => scheduleIds.has(scheduleId));
+};
+const activeScheduleId = () => scheduleDrag.draggedScheduleId || null;
+const isFocusedSchedule = (schedule) => scheduleMatchesFocus(schedule, dataStore.focusedScheduleTarget);
+const isFocusedCell = (target) => {
+    const focus = dataStore.focusedScheduleTarget;
+    if (!focus) return false;
+    if (focus.type && focus.type !== 'campus') return false;
+    if (!fieldMatches(focus.campus_id, target.campus_id)) return false;
+    if (!fieldMatches(focus.day_id, target.day_id)) return false;
+    if (!fieldMatches(focus.time_id, target.time_id)) return false;
+    if (focus.venue_id && target.venue_id && focus.venue_id !== target.venue_id) return false;
+    if (targetHasFocusedSchedule(target, focus)) return true;
+    return Boolean(focus.day_id || focus.time_id || focus.venue_id);
+};
 const visualCellIssues = (target, schedulesInCell = []) => {
     const issues = cellIssues(target);
     const hasActiveScheduleFilter = selectedVenueIds.value.length > 0 || selectedTeacherIds.value.length > 0;
@@ -192,17 +235,11 @@ const visualCellIssues = (target, schedulesInCell = []) => {
     });
 };
 const scheduleIssues = (scheduleId) => dataStore.issuesByScheduleId.get(scheduleId) || [];
-const activeScheduleId = () => scheduleDrag.draggedScheduleId || null;
-const isFocusedSchedule = (scheduleId) => dataStore.focusedScheduleTarget?.schedule_id === scheduleId;
-const isFocusedCell = (target) => {
-    const focus = dataStore.focusedScheduleTarget;
-    if (!focus) return false;
-    return (!focus.type || focus.type === 'campus')
-        && focus.campus_id === target.campus_id
-        && focus.day_id === target.day_id
-        && focus.time_id === target.time_id
-        && (!target.venue_id || focus.venue_id === target.venue_id);
-};
+const campusTableOnlyIssueCategories = new Set([
+    'teacher_day_campus_conflict',
+    'teacher_hours_warning',
+]);
+const shouldHighlightCampusIssue = (issue) => !campusTableOnlyIssueCategories.has(issue.category);
 const isHoverTarget = (target) => {
     const hoverTarget = scheduleDrag.hoverTarget;
     return hoverTarget?.type === 'campus'
@@ -270,12 +307,42 @@ const openCellDetail = (target, schedulesInCell = []) => {
     };
 };
 
+const buildCampusIssueFocus = (issue) => {
+    const rawFocus = issue.focus || {};
+    const scheduleIds = [...new Set([...collectScheduleIds(issue), ...collectScheduleIds(rawFocus)])];
+    const schedules = scheduleIds.map(findScheduleById).filter(Boolean);
+    const currentCampusSchedule = schedules.find(schedule => schedule.campus_id === selectedCampusId.value);
+    const campusId = rawFocus.campus_id
+        || issue.campus_id
+        || currentCampusSchedule?.campus_id
+        || schedules[0]?.campus_id
+        || selectedCampusId.value
+        || null;
+
+    return {
+        type: 'campus',
+        ...rawFocus,
+        schedule_ids: scheduleIds,
+        teacher_id: rawFocus.teacher_id ?? issue.teacher_id ?? null,
+        course_id: rawFocus.course_id ?? issue.course_id ?? null,
+        campus_id: campusId,
+        venue_id: rawFocus.venue_id ?? issue.venue_id ?? null,
+        day_id: rawFocus.day_id ?? issue.day_id ?? null,
+        time_id: rawFocus.time_id ?? issue.time_id ?? null,
+    };
+};
+
 const handleDetailLocate = (issue) => {
-    const focus = issue.focus || {};
+    const focus = buildCampusIssueFocus(issue);
     if (focus.campus_id) selectedCampusId.value = focus.campus_id;
+    selectedTeacherIds.value = focus.teacher_id ? [focus.teacher_id] : [];
     if (focus.venue_id) selectedVenueIds.value = [focus.venue_id];
     else if (focus.campus_id) selectedVenueIds.value = [];
-    dataStore.setScheduleFocus({ type: 'campus', ...focus });
+    if (shouldHighlightCampusIssue(issue)) {
+        dataStore.setScheduleFocus(focus);
+    } else {
+        dataStore.clearScheduleFocus();
+    }
     detailDrawer.value.show = false;
 };
 
@@ -306,7 +373,6 @@ const handleCellPointerLeave = () => {
     scheduleDrag.setHoverTarget(null);
 };
 
-const findScheduleById = (scheduleId) => dataStore.scheduledClasses.find(schedule => schedule.id === scheduleId) || null;
 const findVenueById = (venueId) => dataStore.venues.find(venue => venue.id === venueId) || null;
 const installVenueIdForTarget = (sourceSchedule, target) => target.venue_id ?? sourceSchedule?.venue_id ?? null;
 const canInstallWithExistingVenue = (sourceSchedule, target) => {
@@ -467,7 +533,7 @@ const renderScheduleCard = (schedule) => h(ScheduleCard, {
     schedule,
     context: 'campus',
     issues: scheduleIssues(schedule.id),
-    focused: isFocusedSchedule(schedule.id),
+    focused: isFocusedSchedule(schedule),
     actions: { edit: false, delete: false },
     onPointerDragStart: handlePointerDragStart,
     onLockToggle: (targetSchedule) => dataStore.setScheduleLocked(targetSchedule.id, !targetSchedule.is_locked),
