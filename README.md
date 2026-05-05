@@ -235,15 +235,17 @@ just package
 
 ### CI
 
-Windows CI 位于 `.github/workflows/build.yml`，当前按 Wails 目录结构执行：
-CI 仍直接调用底层命令，不依赖 `just`。
+`.github/workflows/build.yml` 将 lint 拆成 Ubuntu 并行任务，Windows 安装包构建独立并行启动；整体结果仍要求所有 job 成功。CI 直接调用底层命令，不依赖 `just`。
+
+主要命令：
 
 ```bash
-npm --prefix frontend ci
-uv --directory solver sync --frozen
-uv --directory solver run pyinstaller solver.spec
-npm --prefix frontend run build
-go build ./...
+npm --prefix frontend ci --prefer-offline --no-audit --no-fund
+npm --prefix frontend run lint
+go tool golangci-lint run
+uv --directory solver sync --frozen --all-groups
+uv --directory solver run ruff check .
+uv --directory solver run ruff format --check .
 wails build -nsis
 ```
 
