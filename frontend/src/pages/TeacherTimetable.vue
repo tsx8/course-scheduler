@@ -1,11 +1,20 @@
 <script setup>
-import { computed, h, watch } from 'vue';
+import { computed, h, ref, watch } from 'vue';
 import { useDataStore } from '../stores/data';
-import { NSelect, NDataTable, NSpace, NH2, NEmpty, NStatistic, NTag, NFlex, NLayout, NLayoutHeader, NLayoutContent, NButton, NIcon } from 'naive-ui';
+import { NSelect, NDataTable, NSpace, NH2, NEmpty, NTag, NFlex, NButton, NIcon } from 'naive-ui';
 import { DownloadOutline as DownloadIcon } from '@vicons/ionicons5';
 import ScheduleCell from '../components/ScheduleCell.vue';
+import ScheduleDetailDrawer from '../components/ScheduleDetailDrawer.vue';
 
 const dataStore = useDataStore();
+const detailDrawer = ref({
+    show: false,
+    title: '排课详情',
+    schedules: [],
+    issues: [],
+    summaryItems: [],
+});
+
 
 const teacherOptions = computed(() => dataStore.teacherOptions);
 const timeSlots = computed(() => dataStore.time);
@@ -23,12 +32,16 @@ const selectedTeacher = computed(() => {
     return dataStore.teachers.find(t => t.id === selectedTeacherId.value);
 });
 
+const teacherSchedules = computed(() => {
+    if (!selectedTeacherId.value) return [];
+    return dataStore.scheduledClassesByTeacher(selectedTeacherId.value);
+});
+
 const scheduledHours = computed(() => {
     if (!selectedTeacherId.value) return 0;
-    const teacherSchedules = dataStore.scheduledClassesByTeacher(selectedTeacherId.value);
 
     const timeHoursMap = new Map(dataStore.time.map(t => [t.id, t.corresponding_hours]));
-    return teacherSchedules.reduce((total, schedule) => {
+    return teacherSchedules.value.reduce((total, schedule) => {
         const hours = timeHoursMap.get(schedule.time_id) || 0;
         return total + hours;
     }, 0);
@@ -41,6 +54,57 @@ const maxHours = computed(() => {
 const isOverLimit = computed(() => {
     return selectedTeacher.value ? scheduledHours.value > maxHours.value : false;
 });
+const teacherIssues = computed(() => {
+    if (!selectedTeacherId.value) return [];
+    return dataStore.issuesByTeacher.get(selectedTeacherId.value) || [];
+});
+
+const teacherIssueCounts = computed(() => teacherIssues.value.reduce((counts, issue) => {
+    counts[issue.severity] = (counts[issue.severity] || 0) + 1;
+    return counts;
+}, { error: 0, warning: 0, info: 0 }));
+
+const teacherWorkdayCount = computed(() => new Set(teacherSchedules.value.map(schedule => schedule.day_id).filter(Boolean)).size);
+const teacherCampusCount = computed(() => new Set(teacherSchedules.value.map(schedule => schedule.campus_id).filter(Boolean)).size);
+
+const teacherSummaryItems = computed(() => [
+    { label: '课时', value: `${scheduledHours.value}/${maxHours.value}`, type: isOverLimit.value ? 'error' : null },
+    { label: '上课', value: `${teacherWorkdayCount.value} 天` },
+    { label: '校区', value: `${teacherCampusCount.value} 校区` },
+    {
+        label: '异常',
+        value: `${teacherIssueCounts.value.error} 冲突 / ${teacherIssueCounts.value.warning} 风险`,
+        type: teacherIssueCounts.value.error > 0 ? 'error' : (teacherIssueCounts.value.warning > 0 ? 'warning' : null),
+    },
+]);
+
+const openTeacherDetail = () => {
+    if (!selectedTeacher.value) return;
+    detailDrawer.value = {
+        show: true,
+        title: `${selectedTeacher.value.name} 排课详情`,
+        schedules: teacherSchedules.value,
+        issues: teacherIssues.value,
+        summaryItems: teacherSummaryItems.value,
+    };
+};
+const openScheduleDetail = (schedule) => {
+    if (!schedule) return;
+    detailDrawer.value = {
+        show: true,
+        title: '课程详情',
+        schedules: [schedule],
+        issues: dataStore.issuesByScheduleId.get(schedule.id) || [],
+        summaryItems: teacherSummaryItems.value,
+    };
+};
+
+
+const handleDetailLocate = (issue) => {
+    dataStore.setScheduleFocus(issue.focus || { type: 'teacher', teacher_id: selectedTeacherId.value });
+    detailDrawer.value.show = false;
+};
+
 
 const tableData = computed(() => {
     if (!selectedTeacherId.value) return [];
@@ -65,6 +129,7 @@ const columns = computed(() => {
                 teacherId: selectedTeacherId.value,
                 dayId: row[day.id].day_id,
                 timeId: row[day.id].time_id,
+                onViewDetails: openScheduleDetail,
             });
         }
     }));
@@ -90,30 +155,27 @@ const exportCSV = () => {
 
     const teacher = selectedTeacher.value;
     const teacherSchedules = dataStore.scheduledClassesByTeacher(selectedTeacherId.value);
+    const escapeCsvCell = (value) => `"${String(value).replace(/"/g, '""')}"`;
+    const formatSchedule = (schedule) => {
+        const course = dataStore.courses.find(c => c.id === schedule.course_id);
+        const campus = dataStore.campuses.find(c => c.id === schedule.campus_id);
+        const venue = dataStore.venues.find(v => v.id === schedule.venue_id);
+        return `${course?.name || ''} - ${campus?.name || ''} - ${venue?.name || ''}`;
+    };
 
-    let csv = '\uFEFF';
-    csv += `教师课表,${teacher.name}\n`;
-    csv += '时间段,';
-    days.value.forEach(day => {
-        csv += `${day.value},`;
-    });
-    csv += '\n';
+    const rows = [
+        ['教师课表', teacher.name],
+        ['时间段', ...days.value.map(day => day.value)],
+        ...timeSlots.value.map(time => [
+            time.value,
+            ...days.value.map(day => teacherSchedules
+                .filter(s => s.day_id === day.id && s.time_id === time.id)
+                .map(formatSchedule)
+                .join('\n'))
+        ])
+    ];
 
-    timeSlots.value.forEach(time => {
-        csv += `${time.value},`;
-        days.value.forEach(day => {
-            const schedule = teacherSchedules.find(s => s.day_id === day.id && s.time_id === time.id);
-            if (schedule) {
-                const course = dataStore.courses.find(c => c.id === schedule.course_id);
-                const campus = dataStore.campuses.find(c => c.id === schedule.campus_id);
-                const venue = dataStore.venues.find(v => v.id === schedule.venue_id);
-                csv += `"${course?.name || ''} - ${campus?.name || ''} - ${venue?.name || ''}",`;
-            } else {
-                csv += ',';
-            }
-        });
-        csv += '\n';
-    });
+    const csv = '\uFEFF' + rows.map(row => row.map(escapeCsvCell).join(',')).join('\n');
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
@@ -134,8 +196,8 @@ watch(() => dataStore.teachers, (newTeachers) => {
 </script>
 
 <template>
-    <n-layout style="height: calc(100vh - 96px); position: relative;">
-        <n-layout-header bordered style="padding: 12px 24px;">
+    <section class="timetable-page">
+        <header class="timetable-page__header">
             <n-flex justify="space-between" align="center" :wrap="false">
                 <n-h2 style="margin: 0; white-space: nowrap; flex-shrink: 0;">教师个人课表</n-h2>
                 <n-space :wrap="false" align="center" style="flex-shrink: 1; overflow: hidden;">
@@ -151,44 +213,140 @@ watch(() => dataStore.teachers, (newTeachers) => {
                     </n-button>
                 </n-space>
             </n-flex>
-        </n-layout-header>
+        </header>
 
-        <n-layout-content content-style="padding: 24px;" style="height: calc(100vh - 156px); overflow: auto;"
-            :native-scrollbar="false">
-            <n-data-table v-if="selectedTeacherId" :columns="columns" :data="tableData" :bordered="true"
-                :single-line="false" style="width: 100%;" />
-            <n-flex v-else justify="center" align="center" style="flex: 1;">
+        <main class="timetable-page__content">
+            <div v-if="selectedTeacher" class="summary-bar" role="button" tabindex="0" @click="openTeacherDetail" @keyup.enter="openTeacherDetail" @keyup.space="openTeacherDetail">
+                <div v-for="item in teacherSummaryItems" :key="item.label" class="summary-bar__item" :class="item.type ? `summary-bar__item--${item.type}` : null">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.value }}</strong>
+                </div>
+                <n-tag v-if="isOverLimit" class="summary-bar__tag" type="error" size="small">课时超限</n-tag>
+                <n-button class="summary-bar__action" tertiary size="small" type="primary" @click.stop="openTeacherDetail">详情</n-button>
+            </div>
+
+            <div v-if="selectedTeacherId" class="timetable-scroll">
+                <n-data-table :columns="columns" :data="tableData" :bordered="true"
+                    :single-line="false" style="width: 100%;" />
+            </div>
+            <n-flex v-else justify="center" align="center" class="timetable-empty">
                 <n-empty description="请先选择一位教师以管理其课表" size="huge" />
             </n-flex>
-        </n-layout-content>
+        </main>
 
-        <div class="fixed-footer-stats" v-if="selectedTeacher">
-            <n-space align="baseline" :size="20">
-                <n-tag v-if="isOverLimit" type="error" size="small">课时超限</n-tag>
-                <n-statistic label="已排课时">
-                    <span
-                        :style="{ color: isOverLimit ? '#d03050' : 'inherit', fontWeight: isOverLimit ? 'bold' : 'inherit' }">
-                        {{ scheduledHours }}
-                    </span>
-                </n-statistic>
-                <n-statistic label="最大课时">
-                    {{ maxHours }}
-                </n-statistic>
-            </n-space>
-        </div>
-    </n-layout>
+        <ScheduleDetailDrawer
+            v-model:show="detailDrawer.show"
+            :title="detailDrawer.title"
+            :schedules="detailDrawer.schedules"
+            :issues="detailDrawer.issues"
+            :summary-items="detailDrawer.summaryItems"
+            @locate="handleDetailLocate"
+        />
+    </section>
 </template>
 
 <style scoped>
-.fixed-footer-stats {
-    position: absolute;
-    bottom: 20px;
-    right: 24px;
-    z-index: 100;
-    background-color: #fff;
-    padding: 12px 20px;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    border: 1px solid #e0e0e6;
+.timetable-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
 }
+
+.timetable-page__header {
+    flex: 0 0 auto;
+    padding: 12px 24px;
+    border-bottom: 1px solid #efeff5;
+}
+
+.timetable-page__content {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    padding: 24px;
+    overflow: hidden;
+}
+.timetable-scroll {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 100%;
+    overflow: auto;
+}
+
+.timetable-empty {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.summary-bar {
+    display: flex;
+    align-items: center;
+    align-self: flex-start;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-width: 100%;
+    margin-bottom: 12px;
+    padding: 8px;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    background: #f8fafc;
+    cursor: pointer;
+}
+
+.summary-bar:focus-visible {
+    outline: 2px solid #18a058;
+    outline-offset: 2px;
+}
+
+.summary-bar__item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+    padding: 5px 8px;
+    border: 1px solid #e5e7eb;
+    border-radius: 999px;
+    background: #fff;
+}
+
+.summary-bar__item span {
+    display: block;
+    color: #606266;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.summary-bar__item strong {
+    display: block;
+    color: #303133;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.summary-bar__item--error {
+    border-color: #f2b8b5;
+    background: #fff6f6;
+}
+
+.summary-bar__item--warning {
+    border-color: #f3d19e;
+    background: #fff8ee;
+}
+
+.summary-bar__item--error strong {
+    color: #d03050;
+}
+
+.summary-bar__item--warning strong {
+    color: #d46b08;
+}
+.summary-bar__tag,
+.summary-bar__action {
+    flex: 0 0 auto;
+}
+
 </style>

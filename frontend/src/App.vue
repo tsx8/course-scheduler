@@ -43,6 +43,11 @@ html,
   padding: 0;
   height: 100%;
   width: 100%;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 @media (prefers-color-scheme: dark) {
