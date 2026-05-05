@@ -10,9 +10,7 @@ const dataStore = useDataStore();
 const detailDrawer = ref({
     show: false,
     title: '排课详情',
-    schedules: [],
     issues: [],
-    summaryItems: [],
 });
 
 
@@ -62,7 +60,7 @@ const teacherIssues = computed(() => {
 const teacherIssueCounts = computed(() => teacherIssues.value.reduce((counts, issue) => {
     counts[issue.severity] = (counts[issue.severity] || 0) + 1;
     return counts;
-}, { error: 0, warning: 0, info: 0 }));
+}, { error: 0, warning: 0 }));
 
 const teacherWorkdayCount = computed(() => new Set(teacherSchedules.value.map(schedule => schedule.day_id).filter(Boolean)).size);
 const teacherCampusCount = computed(() => new Set(teacherSchedules.value.map(schedule => schedule.campus_id).filter(Boolean)).size);
@@ -83,19 +81,7 @@ const openTeacherDetail = () => {
     detailDrawer.value = {
         show: true,
         title: `${selectedTeacher.value.name} 排课详情`,
-        schedules: teacherSchedules.value,
         issues: teacherIssues.value,
-        summaryItems: teacherSummaryItems.value,
-    };
-};
-const openScheduleDetail = (schedule) => {
-    if (!schedule) return;
-    detailDrawer.value = {
-        show: true,
-        title: '课程详情',
-        schedules: [schedule],
-        issues: dataStore.issuesByScheduleId.get(schedule.id) || [],
-        summaryItems: teacherSummaryItems.value,
     };
 };
 
@@ -129,7 +115,6 @@ const columns = computed(() => {
                 teacherId: selectedTeacherId.value,
                 dayId: row[day.id].day_id,
                 timeId: row[day.id].time_id,
-                onViewDetails: openScheduleDetail,
             });
         }
     }));
@@ -237,9 +222,7 @@ watch(() => dataStore.teachers, (newTeachers) => {
         <ScheduleDetailDrawer
             v-model:show="detailDrawer.show"
             :title="detailDrawer.title"
-            :schedules="detailDrawer.schedules"
             :issues="detailDrawer.issues"
-            :summary-items="detailDrawer.summaryItems"
             @locate="handleDetailLocate"
         />
     </section>

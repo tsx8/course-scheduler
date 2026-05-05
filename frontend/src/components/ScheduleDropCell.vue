@@ -73,7 +73,6 @@ const showBlankDropArea = computed(() => props.showBlankArea && !props.occupied 
 const highestSeverity = computed(() => {
     if (props.issues.some(issue => issue.severity === 'error')) return 'error';
     if (props.issues.some(issue => issue.severity === 'warning')) return 'warning';
-    if (props.issues.some(issue => issue.severity === 'info')) return 'info';
     return 'default';
 });
 const badgeType = computed(() => (highestSeverity.value === 'default' ? 'default' : highestSeverity.value));
@@ -198,10 +197,6 @@ const handlePointerUp = (event) => {
     background: #fffdf6;
 }
 
-.schedule-drop-cell--severity-info {
-    border-color: #cbd5e1;
-    background: #f8fafc;
-}
 
 
 .schedule-drop-cell__issue-badge {

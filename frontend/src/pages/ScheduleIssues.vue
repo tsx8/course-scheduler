@@ -33,13 +33,11 @@ const selectedTimeId = ref(null);
 const severityOptions = [
     { label: '硬冲突', value: 'hard' },
     { label: '风险', value: 'warning' },
-    { label: '提示', value: 'info' }
 ];
 
 const issueSeverityOrder = {
     hard: 0,
     warning: 1,
-    info: 2
 };
 
 const allIssues = computed(() => {
@@ -113,7 +111,6 @@ const severityStats = computed(() => {
     const initial = {
         hard: 0,
         warning: 0,
-        info: 0
     };
 
     return allIssues.value.reduce((stats, issue) => {
@@ -240,12 +237,11 @@ const columns = computed(() => [
             <n-flex justify="space-between" align="center" :wrap="false">
                 <div>
                     <n-h2 style="margin: 0; white-space: nowrap;">问题检查</n-h2>
-                    <n-text depth="3">检查当前排课中的冲突、风险提示与辅助信息。</n-text>
+                    <n-text depth="3">检查当前排课中的硬冲突与风险。</n-text>
                 </div>
                 <n-space :wrap="false" align="center">
                     <n-statistic label="冲突" :value="severityStats.hard" />
                     <n-statistic label="风险" :value="severityStats.warning" />
-                    <n-statistic label="提示" :value="severityStats.info" />
                 </n-space>
             </n-flex>
         </n-layout-header>

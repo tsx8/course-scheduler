@@ -12,17 +12,9 @@ const hardSeverities = new Set([
 const warningSeverities = new Set([
     'warning',
     'capacity_risk',
-    'teacher_hours_risk',
-    'campus_density_risk',
-    'workday_risk',
-    'concentration_risk'
+    'teacher_hours_risk'
 ]);
 
-const infoSeverities = new Set([
-    'info',
-    'staged_schedule',
-    'locked_schedule'
-]);
 
 export function getIssueSeverityMeta(severity) {
     if (hardSeverities.has(severity)) {
@@ -31,10 +23,7 @@ export function getIssueSeverityMeta(severity) {
     if (warningSeverities.has(severity)) {
         return { group: 'warning', label: '风险', tagType: 'warning', className: 'severity-warning' };
     }
-    if (infoSeverities.has(severity)) {
-        return { group: 'info', label: '信息', tagType: 'default', className: 'severity-info' };
-    }
-    return { group: 'info', label: '信息', tagType: 'default', className: 'severity-info' };
+    return { group: 'warning', label: '风险', tagType: 'warning', className: 'severity-warning' };
 }
 </script>
 
@@ -68,11 +57,5 @@ const displayText = computed(() => props.text || meta.value.label);
     color: #d46b08;
     background-color: #fff7e6;
     border-color: #ffd591;
-}
-
-.severity-info {
-    color: #4b5563;
-    background-color: #eef2f7;
-    border-color: #cbd5e1;
 }
 </style>

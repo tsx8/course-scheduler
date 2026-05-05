@@ -154,7 +154,7 @@ export const useDataStore = defineStore('data', () => {
             counts.total += 1;
             counts[issue.severity] = (counts[issue.severity] || 0) + 1;
             return counts;
-        }, { total: 0, error: 0, warning: 0, info: 0 });
+        }, { total: 0, error: 0, warning: 0 });
     });
 
     const issuesByScheduleId = computed(() => {

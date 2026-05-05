@@ -1,7 +1,6 @@
 const ISSUE_SEVERITY = {
     ERROR: 'error',
     WARNING: 'warning',
-    INFO: 'info'
 };
 
 const UNKNOWN = {
@@ -75,7 +74,6 @@ export function buildScheduleDiagnostics(data = {}) {
     const teacherCampuses = data.teacher_campuses || [];
     const scheduledClasses = data.scheduled_classes || [];
     const teacherUnavailability = data.teacher_unavailability || [];
-    const scheduleDensity = data.schedule_density || [];
 
     const teacherMap = byId(teachers);
     const courseMap = byId(courses);
@@ -95,15 +93,7 @@ export function buildScheduleDiagnostics(data = {}) {
 
     const issues = [];
     const activeSchedules = scheduledClasses.filter(schedule => schedule.is_staged !== true);
-    const stagedSchedules = scheduledClasses.filter(schedule => schedule.is_staged === true);
 
-    const labelSchedule = (schedule) => {
-        const teacherName = nameOf(teacherMap, schedule.teacher_id, UNKNOWN.teacher);
-        const courseName = nameOf(courseMap, schedule.course_id, UNKNOWN.course);
-        const dayName = nameOf(dayMap, schedule.day_id, UNKNOWN.day);
-        const timeName = nameOf(timeMap, schedule.time_id, UNKNOWN.time);
-        return `${teacherName} / ${courseName} / ${dayName} ${timeName}`;
-    };
 
     const pushScheduleIssue = (schedule, category, severity, message) => {
         issues.push(createIssue({
@@ -121,24 +111,8 @@ export function buildScheduleDiagnostics(data = {}) {
         }));
     };
 
-    stagedSchedules.forEach(schedule => {
-        pushScheduleIssue(
-            schedule,
-            'staged_schedule_info',
-            ISSUE_SEVERITY.INFO,
-            `${labelSchedule(schedule)} 已暂存，未参与当前课表冲突检查。`
-        );
-    });
 
     activeSchedules.forEach(schedule => {
-        if (schedule.is_locked === true) {
-            pushScheduleIssue(
-                schedule,
-                'locked_schedule_info',
-                ISSUE_SEVERITY.INFO,
-                `${labelSchedule(schedule)} 已锁定。`
-            );
-        }
 
         if (!teacherCourseSet.has(relationKey(schedule.teacher_id, schedule.course_id))) {
             pushScheduleIssue(
@@ -189,28 +163,20 @@ export function buildScheduleDiagnostics(data = {}) {
 
     const byTeacherTime = new Map();
     const byTeacherDay = new Map();
-    const byCampusCell = new Map();
     const byVenueSlot = new Map();
-    const byTeacherCourseDay = new Map();
 
     activeSchedules.forEach(schedule => {
         const teacherTimeKey = relationKey(schedule.teacher_id, schedule.day_id, schedule.time_id);
         const teacherDayKey = relationKey(schedule.teacher_id, schedule.day_id);
-        const campusCellKey = relationKey(schedule.campus_id, schedule.day_id, schedule.time_id);
         const venueSlotKey = relationKey(schedule.venue_id, schedule.day_id, schedule.time_id);
-        const teacherCourseDayKey = relationKey(schedule.teacher_id, schedule.course_id, schedule.day_id);
 
         if (!byTeacherTime.has(teacherTimeKey)) byTeacherTime.set(teacherTimeKey, []);
         if (!byTeacherDay.has(teacherDayKey)) byTeacherDay.set(teacherDayKey, []);
-        if (!byCampusCell.has(campusCellKey)) byCampusCell.set(campusCellKey, []);
         if (!byVenueSlot.has(venueSlotKey)) byVenueSlot.set(venueSlotKey, []);
-        if (!byTeacherCourseDay.has(teacherCourseDayKey)) byTeacherCourseDay.set(teacherCourseDayKey, []);
 
         byTeacherTime.get(teacherTimeKey).push(schedule);
         byTeacherDay.get(teacherDayKey).push(schedule);
-        byCampusCell.get(campusCellKey).push(schedule);
         byVenueSlot.get(venueSlotKey).push(schedule);
-        byTeacherCourseDay.get(teacherCourseDayKey).push(schedule);
     });
 
     byTeacherTime.forEach(schedules => {
@@ -262,20 +228,6 @@ export function buildScheduleDiagnostics(data = {}) {
     });
 
 
-    byTeacherCourseDay.forEach(schedules => {
-        if (schedules.length <= 1) return;
-        const first = schedules[0];
-        issues.push(createIssue({
-            category: 'course_concentration_warning',
-            severity: ISSUE_SEVERITY.WARNING,
-            message: `${nameOf(teacherMap, first.teacher_id, UNKNOWN.teacher)} 在 ${nameOf(dayMap, first.day_id, UNKNOWN.day)} 集中安排了 ${schedules.length} 次 ${nameOf(courseMap, first.course_id, UNKNOWN.course)}。`,
-            scheduleIds: schedules.map(schedule => schedule.id),
-            teacherId: first.teacher_id,
-            courseId: first.course_id,
-            dayId: first.day_id,
-            focus: { teacher_id: first.teacher_id, course_id: first.course_id, day_id: first.day_id }
-        }));
-    });
 
     teachers.forEach(teacher => {
         const teacherSchedules = activeSchedules.filter(schedule => schedule.teacher_id === teacher.id);
@@ -294,55 +246,8 @@ export function buildScheduleDiagnostics(data = {}) {
             }));
         }
 
-        const workdayCount = new Set(teacherSchedules.map(schedule => schedule.day_id).filter(Boolean)).size;
-        if (workdayCount >= 6) {
-            issues.push(createIssue({
-                category: 'teacher_workday_warning',
-                severity: ISSUE_SEVERITY.WARNING,
-                message: `${teacher.name || UNKNOWN.teacher} 已安排 ${workdayCount} 个工作日。`,
-                scheduleIds: teacherSchedules.map(schedule => schedule.id),
-                teacherId: teacher.id,
-                focus: { teacher_id: teacher.id }
-            }));
-        }
     });
 
-    scheduleDensity.forEach(density => {
-        const schedules = byCampusCell.get(relationKey(density.campus_id, density.day_id, density.time_id)) || [];
-        const expectedCount = Number(density.count || 0);
-        const actualCount = schedules.length;
-        if (actualCount !== expectedCount) {
-            issues.push(createIssue({
-                category: 'campus_density_warning',
-                severity: ISSUE_SEVERITY.WARNING,
-                message: `${nameOf(campusMap, density.campus_id, UNKNOWN.campus)} ${nameOf(dayMap, density.day_id, UNKNOWN.day)} ${nameOf(timeMap, density.time_id, UNKNOWN.time)} 期望 ${expectedCount} 节，实际 ${actualCount} 节。`,
-                scheduleIds: schedules.map(schedule => schedule.id),
-                campusId: density.campus_id,
-                dayId: density.day_id,
-                timeId: density.time_id,
-                focus: { campus_id: density.campus_id, day_id: density.day_id, time_id: density.time_id }
-            }));
-        }
-    });
-
-    byCampusCell.forEach((schedules, key) => {
-        const [campusId, dayId, timeId] = key.split('::');
-        const expectedDensity = scheduleDensity.find(density => (
-            density.campus_id === campusId && density.day_id === dayId && density.time_id === timeId
-        ));
-        if (!expectedDensity && schedules.length > 0) {
-            issues.push(createIssue({
-                category: 'campus_density_warning',
-                severity: ISSUE_SEVERITY.WARNING,
-                message: `${nameOf(campusMap, campusId, UNKNOWN.campus)} ${nameOf(dayMap, dayId, UNKNOWN.day)} ${nameOf(timeMap, timeId, UNKNOWN.time)} 未设置排课密度，实际 ${schedules.length} 节。`,
-                scheduleIds: schedules.map(schedule => schedule.id),
-                campusId,
-                dayId,
-                timeId,
-                focus: { campus_id: campusId, day_id: dayId, time_id: timeId }
-            }));
-        }
-    });
 
     return issues.sort((left, right) => left.id.localeCompare(right.id));
 }

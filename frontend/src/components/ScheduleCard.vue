@@ -57,10 +57,6 @@
         </dl>
 
         <div v-if="hasVisibleActions" class="schedule-card__actions">
-            <n-button v-if="actionConfig.viewDetails" quaternary size="tiny" :aria-label="'详情'" title="详情" @pointerdown.stop @click.stop="emitAction('view-details')">
-                <n-icon v-if="isCompactDensity" :component="DetailsIcon" />
-                <template v-else>详情</template>
-            </n-button>
             <n-button v-if="actionConfig.edit" quaternary size="tiny" :aria-label="'编辑'" title="编辑" @pointerdown.stop @click.stop="emitAction('edit')">
                 <n-icon v-if="isCompactDensity" :component="EditIcon" />
                 <template v-else>编辑</template>
@@ -84,7 +80,7 @@
 <script setup>
 import { computed } from 'vue';
 import { NButton, NIcon, NTag } from 'naive-ui';
-import { ArchiveOutline as StageIcon, CreateOutline as EditIcon, InformationCircleOutline as DetailsIcon, LockClosedOutline, LockOpenOutline, TrashOutline as DeleteIcon } from '@vicons/ionicons5';
+import { ArchiveOutline as StageIcon, CreateOutline as EditIcon, LockClosedOutline, LockOpenOutline, TrashOutline as DeleteIcon } from '@vicons/ionicons5';
 import { useDataStore } from '../stores/data';
 import ScheduleIssueTag from './ScheduleIssueTag.vue';
 
@@ -110,7 +106,6 @@ const emit = defineEmits([
     'stage',
     'edit',
     'delete',
-    'view-details',
     'pointer-drag-start',
     'pointer-drop',
 ]);
@@ -141,7 +136,7 @@ const effectiveDensity = computed(() => {
 const isCompactDensity = computed(() => effectiveDensity.value === 'compact');
 const isStagingDensity = computed(() => effectiveDensity.value === 'staging');
 const showDetailGrid = computed(() => effectiveDensity.value === 'normal');
-const severityRank = { error: 0, warning: 1, info: 2 };
+const severityRank = { error: 0, warning: 1 };
 const visibleIssues = computed(() => props.issues.filter(issue => issue));
 const orderedIssues = computed(() => visibleIssues.value.slice().sort((left, right) => {
     const leftRank = severityRank[left.severity] ?? 3;
@@ -156,7 +151,6 @@ const lockActionText = computed(() => {
 });
 const lockIcon = computed(() => (props.schedule?.is_locked ? LockClosedOutline : LockOpenOutline));
 const defaultActions = {
-    viewDetails: true,
     edit: true,
     lock: true,
     stage: true,

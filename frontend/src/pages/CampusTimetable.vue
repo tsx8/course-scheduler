@@ -34,9 +34,7 @@ const conflictModal = ref({
 const detailDrawer = ref({
     show: false,
     title: '排课详情',
-    schedules: [],
     issues: [],
-    summaryItems: [],
 });
 
 
@@ -75,10 +73,10 @@ const campusIssues = computed(() => {
 const campusIssueCounts = computed(() => campusIssues.value.reduce((counts, issue) => {
     counts[issue.severity] = (counts[issue.severity] || 0) + 1;
     return counts;
-}, { error: 0, warning: 0, info: 0 }));
+}, { error: 0, warning: 0 }));
 
 const campusLoadStats = computed(() => {
-    if (!selectedCampusId.value) return { actual: 0, expected: 0, shortage: 0, excess: 0 };
+    if (!selectedCampusId.value) return { actual: 0, expected: 0, excess: 0 };
 
     const actualByCell = new Map();
     selectedCampusActiveSchedules.value.forEach(schedule => {
@@ -96,27 +94,23 @@ const campusLoadStats = computed(() => {
 
     const keys = new Set([...actualByCell.keys(), ...expectedByCell.keys()]);
     let expected = 0;
-    let shortage = 0;
     let excess = 0;
     keys.forEach(key => {
         const actualCount = actualByCell.get(key) || 0;
         const expectedCount = expectedByCell.get(key) || 0;
         expected += expectedCount;
-        shortage += Math.max(0, expectedCount - actualCount);
         excess += Math.max(0, actualCount - expectedCount);
     });
 
     return {
         actual: selectedCampusActiveSchedules.value.length,
         expected,
-        shortage,
         excess,
     };
 });
 
 const campusSummaryItems = computed(() => [
     { label: '总量', value: `${campusLoadStats.value.actual}/${campusLoadStats.value.expected}` },
-    { label: '缺口', value: campusLoadStats.value.shortage, type: campusLoadStats.value.shortage > 0 ? 'warning' : null },
     { label: '超量', value: campusLoadStats.value.excess, type: campusLoadStats.value.excess > 0 ? 'warning' : null },
     {
         label: '异常',
@@ -174,7 +168,6 @@ const visualCellIssues = (target, schedulesInCell = []) => {
 
     const visibleScheduleIds = new Set(schedulesInCell.map(({ schedule }) => schedule.id));
     return issues.filter(issue => {
-        if (issue.category === 'campus_density_warning') return false;
         if (issue.venue_id) return issue.venue_id === target.venue_id;
         return issueTouchesSchedules(issue, visibleScheduleIds);
     });
@@ -214,7 +207,7 @@ const cellSummaryItems = (target, actualCount, issues = cellIssues(target)) => {
     const issueCounts = issues.reduce((counts, issue) => {
         counts[issue.severity] = (counts[issue.severity] || 0) + 1;
         return counts;
-    }, { error: 0, warning: 0, info: 0 });
+    }, { error: 0, warning: 0 });
 
     return [
         { label: '期望 / 实际', value: `${expectedCount}/${actualCount}` },
@@ -232,10 +225,8 @@ const openCampusDetail = () => {
     if (!selectedCampus.value) return;
     detailDrawer.value = {
         show: true,
-        title: `${selectedCampus.value.name} 排课概览`,
-        schedules: selectedCampusActiveSchedules.value,
+        title: `${selectedCampus.value.name} 排课详情`,
         issues: campusIssues.value,
-        summaryItems: campusSummaryItems.value,
     };
 };
 
@@ -251,9 +242,7 @@ const openCellDetail = (target, schedulesInCell = []) => {
     detailDrawer.value = {
         show: true,
         title: `${selectedCampus.value?.name || '校区'} · ${dayName(target.day_id)} ${timeName(target.time_id)} · ${venueName(target.venue_id)}`,
-        schedules,
         issues,
-        summaryItems: cellSummaryItems(target, schedules.length, visualIssues),
     };
 };
 
@@ -458,7 +447,6 @@ const renderScheduleCard = (schedule) => h(ScheduleCard, {
     onPointerDragStart: handlePointerDragStart,
     onLockToggle: (targetSchedule) => dataStore.setScheduleLocked(targetSchedule.id, !targetSchedule.is_locked),
     onStage: (targetSchedule) => dataStore.stageSchedule(targetSchedule.id),
-    onViewDetails: (targetSchedule) => openCellDetail(cellTarget(targetSchedule.day_id, targetSchedule.time_id), [{ schedule: targetSchedule }]),
 });
 
 const renderCell = (dayId, timeId, schedulesInCell) => {
@@ -635,9 +623,7 @@ watch(() => dataStore.campuses, (newCampuses) => {
         <ScheduleDetailDrawer
             v-model:show="detailDrawer.show"
             :title="detailDrawer.title"
-            :schedules="detailDrawer.schedules"
             :issues="detailDrawer.issues"
-            :summary-items="detailDrawer.summaryItems"
             @locate="handleDetailLocate"
         />
     </section>

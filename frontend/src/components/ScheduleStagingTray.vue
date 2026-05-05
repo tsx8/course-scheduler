@@ -34,7 +34,7 @@
                 :schedule="schedule"
                 context="staging"
                 :issues="dataStore.issuesByScheduleId.get(schedule.id) || []"
-                :actions="{ viewDetails: false, edit: false, stage: false }"
+                :actions="{ edit: false, stage: false }"
                 @pointer-drag-start="handleCardDragStart"
                 @lock-toggle="handleLockToggle"
                 @delete="handleDelete"

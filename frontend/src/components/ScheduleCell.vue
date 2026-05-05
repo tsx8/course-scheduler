@@ -22,7 +22,6 @@
                 @stage="handleStage"
                 @edit="handleEdit"
                 @delete="handleDelete"
-                @view-details="handleViewDetails"
             />
         </template>
 
@@ -105,7 +104,6 @@ const props = defineProps({
     dayId: { type: String, required: true },
     timeId: { type: String, required: true },
 });
-const emit = defineEmits(['view-details']);
 
 const dataStore = useDataStore();
 const scheduleDrag = useScheduleDragStore();
@@ -235,9 +233,6 @@ const handleLockToggle = (schedule) => {
 const handleStage = (schedule) => {
     dataStore.stageSchedule(schedule.id);
     message.success('排课已暂存');
-};
-const handleViewDetails = (schedule) => {
-    emit('view-details', schedule);
 };
 
 
