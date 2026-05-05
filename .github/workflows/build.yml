@@ -80,6 +80,11 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - name: Prepare embedded asset placeholders
+        run: |
+          mkdir -p frontend/dist solver/dist
+          touch frontend/dist/index.html solver/dist/solver.exe
+
       - name: Lint Go
         uses: golangci/golangci-lint-action@v9
         with:
@@ -100,7 +105,7 @@ jobs:
           python-version-file: solver/.python-version
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v8
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
           cache-dependency-glob: |
@@ -166,7 +171,7 @@ jobs:
           python-version-file: solver/.python-version
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v8
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
           cache-dependency-glob: |
