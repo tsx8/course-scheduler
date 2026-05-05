@@ -17,9 +17,14 @@ const selectedCampusId = computed({
     set: (val) => { dataStore.selectedCampusIdForCampusView = val; }
 });
 
-const selectedVenueId = computed({
-    get: () => dataStore.selectedVenueIdForCampusView,
-    set: (val) => { dataStore.selectedVenueIdForCampusView = val; }
+const selectedVenueIds = computed({
+    get: () => dataStore.selectedVenueIdsForCampusView,
+    set: (val) => { dataStore.selectedVenueIdsForCampusView = Array.isArray(val) ? val : []; }
+});
+
+const selectedTeacherIds = computed({
+    get: () => dataStore.selectedTeacherIdsForCampusView,
+    set: (val) => { dataStore.selectedTeacherIdsForCampusView = Array.isArray(val) ? val : []; }
 });
 
 const campusOptions = computed(() => dataStore.campusOptions);
@@ -40,12 +45,25 @@ const detailDrawer = ref({
 
 const venueOptions = computed(() => {
     if (!selectedCampusId.value) return [];
-    const venues = dataStore.venueOptionsByCampus(selectedCampusId.value);
-    return [{ label: '全部场地', value: null }, ...venues];
+    return dataStore.venueOptionsByCampus(selectedCampusId.value);
+});
+const teacherOptions = computed(() => {
+    if (!selectedCampusId.value) return [];
+    const teacherIds = new Set(
+        dataStore.activeScheduledClasses
+            .filter(schedule => schedule.campus_id === selectedCampusId.value)
+            .map(schedule => schedule.teacher_id)
+    );
+
+    return dataStore.teachers
+        .filter(teacher => teacherIds.has(teacher.id))
+        .map(teacher => ({ label: teacher.name, value: teacher.id }));
 });
 
+
 watch(selectedCampusId, () => {
-    selectedVenueId.value = null;
+    selectedVenueIds.value = [];
+    selectedTeacherIds.value = [];
 });
 
 const scheduleMap = computed(() => dataStore.getScheduledClassesByCampus);
@@ -152,8 +170,8 @@ const cellTarget = (dayId, timeId) => {
         time_id: timeId,
     };
 
-    if (selectedVenueId.value) {
-        target.venue_id = selectedVenueId.value;
+    if (selectedVenueIds.value.length === 1) {
+        target.venue_id = selectedVenueIds.value[0];
     }
 
     return target;
@@ -164,11 +182,12 @@ const cellIssues = (target) => dataStore.issuesByCampusCell.get(campusIssueKey(t
 const issueTouchesSchedules = (issue, scheduleIds) => issue.schedule_ids?.some(scheduleId => scheduleIds.has(scheduleId));
 const visualCellIssues = (target, schedulesInCell = []) => {
     const issues = cellIssues(target);
-    if (!target.venue_id) return issues;
+    const hasActiveScheduleFilter = selectedVenueIds.value.length > 0 || selectedTeacherIds.value.length > 0;
+    if (!hasActiveScheduleFilter) return issues;
 
     const visibleScheduleIds = new Set(schedulesInCell.map(({ schedule }) => schedule.id));
     return issues.filter(issue => {
-        if (issue.venue_id) return issue.venue_id === target.venue_id;
+        if (issue.venue_id && selectedVenueIds.value.length > 0 && !selectedVenueIds.value.includes(issue.venue_id)) return false;
         return issueTouchesSchedules(issue, visibleScheduleIds);
     });
 };
@@ -196,6 +215,11 @@ const findById = (records, id) => records.find(record => record.id === id);
 const dayName = (dayId) => findById(dataStore.day, dayId)?.value || '未知日期';
 const timeName = (timeId) => findById(dataStore.time, timeId)?.value || '未知时间';
 const venueName = (venueId) => findById(dataStore.venues, venueId)?.name || '全部场地';
+const venueScopeName = (target) => {
+    if (target.venue_id) return venueName(target.venue_id);
+    if (selectedVenueIds.value.length === 0) return '全部场地';
+    return `${selectedVenueIds.value.length}个场地`;
+};
 const dedupeIssues = (issues) => {
     const issueMap = new Map();
     issues.filter(Boolean).forEach(issue => issueMap.set(issue.id, issue));
@@ -241,7 +265,7 @@ const openCellDetail = (target, schedulesInCell = []) => {
     dataStore.setScheduleFocus({ type: 'campus', ...target });
     detailDrawer.value = {
         show: true,
-        title: `${selectedCampus.value?.name || '校区'} · ${dayName(target.day_id)} ${timeName(target.time_id)} · ${venueName(target.venue_id)}`,
+        title: `${selectedCampus.value?.name || '校区'} · ${dayName(target.day_id)} ${timeName(target.time_id)} · ${venueScopeName(target)}`,
         issues,
     };
 };
@@ -249,7 +273,8 @@ const openCellDetail = (target, schedulesInCell = []) => {
 const handleDetailLocate = (issue) => {
     const focus = issue.focus || {};
     if (focus.campus_id) selectedCampusId.value = focus.campus_id;
-    if (focus.venue_id !== undefined) selectedVenueId.value = focus.venue_id || null;
+    if (focus.venue_id) selectedVenueIds.value = [focus.venue_id];
+    else if (focus.campus_id) selectedVenueIds.value = [];
     dataStore.setScheduleFocus({ type: 'campus', ...focus });
     detailDrawer.value.show = false;
 };
@@ -472,7 +497,7 @@ const renderCell = (dayId, timeId, schedulesInCell) => {
         onCardDrop: handleCardDrop,
         onIssueClick: () => openCellDetail(target, schedulesInCell),
     }, {
-        default: () => selectedVenueId.value
+        default: () => selectedVenueIds.value.length > 0
             ? cards
             : [renderCounterNode(target, schedulesInCell.length), ...cards],
     });
@@ -552,8 +577,20 @@ const handleExportToCsv = () => {
     link.setAttribute('href', url);
 
     const campusName = campusOptions.value.find(c => c.value === selectedCampusId.value)?.label || '课表';
-    const venueName = venueOptions.value.find(v => v.value === selectedVenueId.value)?.label;
-    const fileName = venueName ? `${campusName}_${venueName}_课表.csv` : `${campusName}_总课表.csv`;
+    const venueNames = selectedVenueIds.value
+        .map(venueId => dataStore.venues.find(venue => venue.id === venueId)?.name)
+        .filter(Boolean);
+    const venueNamePart = venueNames.length === 0
+        ? ''
+        : `_${venueNames.length === 1 ? venueNames[0] : `${venueNames.length}个场地`}`;
+    const teacherNames = selectedTeacherIds.value
+        .map(teacherId => dataStore.teachers.find(teacher => teacher.id === teacherId)?.name)
+        .filter(Boolean);
+    const teacherNamePart = teacherNames.length === 0
+        ? ''
+        : `_${teacherNames.length === 1 ? teacherNames[0] : `${teacherNames.length}位教师`}`;
+    const fileSuffix = venueNames.length > 0 || teacherNames.length > 0 ? '课表' : '总课表';
+    const fileName = `${campusName}${venueNamePart}${teacherNamePart}_${fileSuffix}.csv`;
 
     link.setAttribute('download', fileName);
     link.style.visibility = 'hidden';
@@ -580,8 +617,10 @@ watch(() => dataStore.campuses, (newCampuses) => {
                 <n-flex :wrap="false" align="center" style="flex-shrink: 1; overflow: hidden;">
                     <n-select v-model:value="selectedCampusId" placeholder="请选择校区" :options="campusOptions" clearable
                         style="width: 150px" />
-                    <n-select v-model:value="selectedVenueId" placeholder="选择场地" :options="venueOptions" clearable
-                        :disabled="!selectedCampusId" style="width: 150px" />
+                    <n-select v-model:value="selectedVenueIds" multiple max-tag-count="responsive" placeholder="选择场地" :options="venueOptions" clearable
+                        :disabled="!selectedCampusId" style="width: 180px" />
+                    <n-select v-model:value="selectedTeacherIds" multiple max-tag-count="responsive" placeholder="选择教师" :options="teacherOptions" clearable
+                        :disabled="!selectedCampusId" style="width: 180px" />
                     <n-button type="primary" @click="handleExportToCsv" :disabled="!selectedCampusId">
                         <template #icon><n-icon :component="ExportIcon" /></template>
                         导出CSV

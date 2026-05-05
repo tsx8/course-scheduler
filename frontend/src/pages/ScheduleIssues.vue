@@ -150,9 +150,9 @@ const locateIssue = (issue) => {
         dataStore.selectedCampusIdForCampusView = focus.campus_id;
     }
     if (focus.venue_id) {
-        dataStore.selectedVenueIdForCampusView = focus.venue_id;
+        dataStore.selectedVenueIdsForCampusView = [focus.venue_id];
     } else if (focus.campus_id) {
-        dataStore.selectedVenueIdForCampusView = null;
+        dataStore.selectedVenueIdsForCampusView = [];
     }
 
     router.push({ name: focus.teacher_id ? 'TeacherTimetable' : 'CampusTimetable' });

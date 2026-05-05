@@ -46,7 +46,8 @@ export const useDataStore = defineStore('data', () => {
     const resetState = () => {
         selectedCampusIdForCampusView.value = null;
         selectedTeacherIdForTeacherView.value = null;
-        selectedVenueIdForCampusView.value = null;
+        selectedVenueIdsForCampusView.value = [];
+        selectedTeacherIdsForCampusView.value = [];
         clearScheduleFocus();
 
         hasUnsavedChanges.value = false;
@@ -130,7 +131,8 @@ export const useDataStore = defineStore('data', () => {
 
     const selectedCampusIdForCampusView = ref(null);
     const selectedTeacherIdForTeacherView = ref(null);
-    const selectedVenueIdForCampusView = ref(null);
+    const selectedVenueIdsForCampusView = ref([]);
+    const selectedTeacherIdsForCampusView = ref([]);
 
     const diagnosticsData = computed(() => ({
         teachers: teachers.value,
@@ -702,15 +704,23 @@ export const useDataStore = defineStore('data', () => {
 
     const getScheduledClassesByCampus = computed(() => {
         const campusId = selectedCampusIdForCampusView.value;
-        const venueId = selectedVenueIdForCampusView.value;
+        const venueIds = Array.isArray(selectedVenueIdsForCampusView.value)
+            ? selectedVenueIdsForCampusView.value
+            : [];
+        const selectedVenueIds = new Set(venueIds);
+        const teacherIds = Array.isArray(selectedTeacherIdsForCampusView.value)
+            ? selectedTeacherIdsForCampusView.value
+            : [];
+        const selectedTeacherIds = new Set(teacherIds);
 
         if (!campusId) return new Map();
 
         const scheduleMap = new Map();
         const filteredSchedules = activeScheduledClasses.value.filter(schedule => {
             const campusMatch = schedule.campus_id === campusId;
-            const venueMatch = !venueId || schedule.venue_id === venueId;
-            return campusMatch && venueMatch;
+            const venueMatch = selectedVenueIds.size === 0 || selectedVenueIds.has(schedule.venue_id);
+            const teacherMatch = selectedTeacherIds.size === 0 || selectedTeacherIds.has(schedule.teacher_id);
+            return campusMatch && venueMatch && teacherMatch;
         });
 
         filteredSchedules.forEach(schedule => {
@@ -978,7 +988,8 @@ export const useDataStore = defineStore('data', () => {
 
         selectedCampusIdForCampusView,
         selectedTeacherIdForTeacherView,
-        selectedVenueIdForCampusView,
+        selectedVenueIdsForCampusView,
+        selectedTeacherIdsForCampusView,
 
         courseOptions,
         campusOptions,
