@@ -21,6 +21,9 @@ func initDatabase(db *sql.DB) error {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		return err
 	}
+	if err := migrateScheduledClassState(db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -81,6 +84,7 @@ func (a *App) CommitData() error {
 func (a *App) ClearTempData() error {
 	return clearAllTempTables(a.db)
 }
+
 
 func (a *App) ListCommittedTeachers() ([]Teacher, error) {
 	return loadTeachers(a.db, false)
@@ -355,6 +359,51 @@ func columnExists(conn queryExecutor, table string, column string) (bool, error)
 	}
 	return false, rows.Err()
 }
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func migrateScheduledClassState(conn queryExecutor) error {
+	for _, table := range []string{"scheduled_classes", "scheduled_classes_temp"} {
+		exists, err := tableExists(conn, table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+
+		hasIsLocked, err := columnExists(conn, table, "is_locked")
+		if err != nil {
+			return err
+		}
+		if !hasIsLocked {
+			if _, err := conn.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0", table)); err != nil {
+				return fmt.Errorf("add is_locked to %s: %w", table, err)
+			}
+			if _, err := conn.Exec(fmt.Sprintf("UPDATE %s SET is_locked = 1", table)); err != nil {
+				return fmt.Errorf("default migrated is_locked for %s: %w", table, err)
+			}
+		}
+
+		for _, column := range []string{"is_staged", "staged_order"} {
+			hasColumn, err := columnExists(conn, table, column)
+			if err != nil {
+				return err
+			}
+			if hasColumn {
+				continue
+			}
+			if _, err := conn.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s INTEGER NOT NULL DEFAULT 0", table, column)); err != nil {
+				return fmt.Errorf("add %s to %s: %w", column, table, err)
+			}
+		}
+	}
+	return nil
+}
 
 func loadTeacherCampusesFromLegacy(conn queryExecutor, useTemp bool) ([]TeacherCampus, error) {
 	teacherTable := tableName("teachers", useTemp)
@@ -521,7 +570,40 @@ func loadTeacherCourses(conn queryExecutor, useTemp bool) ([]TeacherCourse, erro
 
 func loadScheduledClasses(conn queryExecutor, useTemp bool) ([]ScheduledClass, error) {
 	table := tableName("scheduled_classes", useTemp)
-	rows, err := conn.Query(fmt.Sprintf("SELECT id, teacher_id, course_id, day_id, time_id, campus_id, venue_id FROM %s", table))
+	isLockedSelect := "1"
+	hasIsLocked, err := columnExists(conn, table, "is_locked")
+	if err != nil {
+		return nil, err
+	}
+	if hasIsLocked {
+		isLockedSelect = "is_locked"
+	}
+
+	isStagedSelect := "0"
+	hasIsStaged, err := columnExists(conn, table, "is_staged")
+	if err != nil {
+		return nil, err
+	}
+	if hasIsStaged {
+		isStagedSelect = "is_staged"
+	}
+
+	stagedOrderSelect := "0"
+	hasStagedOrder, err := columnExists(conn, table, "staged_order")
+	if err != nil {
+		return nil, err
+	}
+	if hasStagedOrder {
+		stagedOrderSelect = "staged_order"
+	}
+
+	rows, err := conn.Query(fmt.Sprintf(
+		"SELECT id, teacher_id, course_id, day_id, time_id, campus_id, venue_id, %s, %s, %s FROM %s",
+		isLockedSelect,
+		isStagedSelect,
+		stagedOrderSelect,
+		table,
+	))
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
@@ -530,9 +612,13 @@ func loadScheduledClasses(conn queryExecutor, useTemp bool) ([]ScheduledClass, e
 	classes := []ScheduledClass{}
 	for rows.Next() {
 		var class ScheduledClass
-		if err := rows.Scan(&class.ID, &class.TeacherID, &class.CourseID, &class.DayID, &class.TimeID, &class.CampusID, &class.VenueID); err != nil {
+		var isLocked int
+		var isStaged int
+		if err := rows.Scan(&class.ID, &class.TeacherID, &class.CourseID, &class.DayID, &class.TimeID, &class.CampusID, &class.VenueID, &isLocked, &isStaged, &class.StagedOrder); err != nil {
 			return nil, fmt.Errorf("scan %s: %w", table, err)
 		}
+		class.IsLocked = isLocked != 0
+		class.IsStaged = isStaged != 0
 		classes = append(classes, class)
 	}
 	return classes, rows.Err()
@@ -688,7 +774,7 @@ func writeAllDataToTables(tx *sql.Tx, data AllData, useTemp bool) error {
 
 	for _, class := range data.ScheduledClasses {
 		if _, err := tx.Exec(
-			fmt.Sprintf("INSERT INTO %s (id, teacher_id, course_id, day_id, time_id, campus_id, venue_id) VALUES (?, ?, ?, ?, ?, ?, ?)", tableName("scheduled_classes", useTemp)),
+			fmt.Sprintf("INSERT INTO %s (id, teacher_id, course_id, day_id, time_id, campus_id, venue_id, is_locked, is_staged, staged_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", tableName("scheduled_classes", useTemp)),
 			class.ID,
 			class.TeacherID,
 			class.CourseID,
@@ -696,6 +782,9 @@ func writeAllDataToTables(tx *sql.Tx, data AllData, useTemp bool) error {
 			class.TimeID,
 			class.CampusID,
 			class.VenueID,
+			boolToInt(class.IsLocked),
+			boolToInt(class.IsStaged),
+			class.StagedOrder,
 		); err != nil {
 			return fmt.Errorf("insert scheduled class: %w", err)
 		}
@@ -880,6 +969,9 @@ CREATE TABLE IF NOT EXISTS scheduled_classes (
     time_id TEXT NOT NULL,
     campus_id TEXT NOT NULL,
     venue_id TEXT NOT NULL,
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    is_staged INTEGER NOT NULL DEFAULT 0,
+    staged_order INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE,
     FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
     FOREIGN KEY (day_id) REFERENCES days(id) ON DELETE CASCADE,
@@ -976,6 +1068,9 @@ CREATE TABLE IF NOT EXISTS scheduled_classes_temp (
     time_id TEXT NOT NULL,
     campus_id TEXT NOT NULL,
     venue_id TEXT NOT NULL,
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    is_staged INTEGER NOT NULL DEFAULT 0,
+    staged_order INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (teacher_id) REFERENCES teachers_temp(id) ON DELETE CASCADE,
     FOREIGN KEY (course_id) REFERENCES courses_temp(id) ON DELETE CASCADE,
     FOREIGN KEY (day_id) REFERENCES days_temp(id) ON DELETE CASCADE,

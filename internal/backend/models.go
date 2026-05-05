@@ -74,13 +74,26 @@ type TeacherCampus struct {
 }
 
 type ScheduledClass struct {
-	ID        string `json:"id"`
-	TeacherID string `json:"teacher_id"`
-	CourseID  string `json:"course_id"`
-	DayID     string `json:"day_id"`
-	TimeID    string `json:"time_id"`
-	CampusID  string `json:"campus_id"`
-	VenueID   string `json:"venue_id"`
+	ID          string `json:"id"`
+	TeacherID   string `json:"teacher_id"`
+	CourseID    string `json:"course_id"`
+	DayID       string `json:"day_id"`
+	TimeID      string `json:"time_id"`
+	CampusID    string `json:"campus_id"`
+	VenueID     string `json:"venue_id"`
+	IsLocked    bool   `json:"is_locked"`
+	IsStaged    bool   `json:"is_staged"`
+	StagedOrder int    `json:"staged_order"`
+}
+
+func (s *ScheduledClass) UnmarshalJSON(data []byte) error {
+	type scheduledClassAlias ScheduledClass
+	class := scheduledClassAlias{IsLocked: true}
+	if err := json.Unmarshal(data, &class); err != nil {
+		return err
+	}
+	*s = ScheduledClass(class)
+	return nil
 }
 
 type TeacherUnavailability struct {

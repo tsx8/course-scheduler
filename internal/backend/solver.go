@@ -18,9 +18,27 @@ func (a *App) RunSolver() (AllData, error) {
 		return AllData{}, err
 	}
 
+	solverInput := currentData
+	stagedSchedules := make([]ScheduledClass, 0)
+	lockedScheduleIDs := make(map[string]struct{})
+	lockedActiveSchedules := make([]ScheduledClass, 0)
+	for _, schedule := range currentData.ScheduledClasses {
+		if schedule.IsStaged {
+			stagedSchedules = append(stagedSchedules, schedule)
+			continue
+		}
+		if schedule.IsLocked {
+			schedule.IsStaged = false
+			schedule.StagedOrder = 0
+			lockedActiveSchedules = append(lockedActiveSchedules, schedule)
+			lockedScheduleIDs[schedule.ID] = struct{}{}
+		}
+	}
+	solverInput.ScheduledClasses = lockedActiveSchedules
+
 	inputPath := filepath.Join(a.dataDir, "solver_input.tmp.json")
 	outputPath := filepath.Join(a.dataDir, "solver_output.tmp.json")
-	inputContent, err := json.Marshal(currentData)
+	inputContent, err := json.Marshal(solverInput)
 	if err != nil {
 		return AllData{}, fmt.Errorf("marshal solver input: %w", err)
 	}
@@ -51,6 +69,16 @@ func (a *App) RunSolver() (AllData, error) {
 	if err := json.Unmarshal(content, &solvedData); err != nil {
 		return AllData{}, fmt.Errorf("parse solver output: %w", err)
 	}
+	for index := range solvedData.ScheduledClasses {
+		if _, ok := lockedScheduleIDs[solvedData.ScheduledClasses[index].ID]; ok {
+			solvedData.ScheduledClasses[index].IsLocked = true
+		} else {
+			solvedData.ScheduledClasses[index].IsLocked = false
+		}
+		solvedData.ScheduledClasses[index].IsStaged = false
+		solvedData.ScheduledClasses[index].StagedOrder = 0
+	}
+	solvedData.ScheduledClasses = append(solvedData.ScheduledClasses, stagedSchedules...)
 	if err := a.SaveTempData(solvedData); err != nil {
 		return AllData{}, err
 	}
