@@ -9,6 +9,11 @@
     "build": "vite build",
     "build:wails": "vite build --mode wails",
     "preview": "vite preview",
+    "lint": "npm run lint:oxlint && npm run format:check",
+    "lint:oxlint": "oxlint src --vue-plugin",
+    "lint:oxlint:fix": "oxlint src --vue-plugin --fix",
+    "format:check": "prettier --check index.html package.json ../wails.json ../.github/workflows/build.yml ../.golangci.yml ../.prettierrc.json",
+    "format": "prettier --write index.html package.json ../wails.json ../.github/workflows/build.yml ../.golangci.yml ../.prettierrc.json",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },
@@ -24,6 +29,8 @@
   "devDependencies": {
     "@playwright/test": "^1.59.1",
     "@vitejs/plugin-vue": "^5.2.1",
+    "oxlint": "^1.63.0",
+    "prettier": "^3.8.3",
     "unplugin-auto-import": "^20.3.0",
     "unplugin-vue-components": "^30.0.0",
     "vite": "^6.0.3",

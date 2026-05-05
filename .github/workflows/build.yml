@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - '.github/workflows/build.yml'
+      - '.golangci.yml'
+      - '.prettierrc.json'
       - 'build/**'
       - 'frontend/**'
       - 'internal/**'
@@ -17,6 +19,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/build.yml'
+      - '.golangci.yml'
+      - '.prettierrc.json'
       - 'build/**'
       - 'frontend/**'
       - 'internal/**'
@@ -34,7 +38,56 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: solver/.python-version
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
+      - name: Sync solver dependencies
+        run: uv --directory solver sync --frozen --all-groups
+
+      - name: Lint frontend
+        run: npm --prefix frontend run lint
+
+      - name: Lint Go
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.4
+
+      - name: Lint solver
+        run: uv --directory solver run ruff check .
+
+      - name: Check solver formatting
+        run: uv --directory solver run ruff format --check .
+
   build-windows:
+    needs: lint
     runs-on: windows-latest
 
     steps:

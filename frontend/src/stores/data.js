@@ -454,7 +454,7 @@ export const useDataStore = defineStore('data', () => {
     const updateTeacher = (updatedTeacher) => {
         const index = teachers.value.findIndex(t => t.id === updatedTeacher.id);
         if (index !== -1) {
-            const { teaches, campus_ids, ...basicInfo } = updatedTeacher;
+            const { teaches: _teaches, campus_ids, ...basicInfo } = updatedTeacher;
             teachers.value[index] = { ...teachers.value[index], ...basicInfo };
             teacherCourses.value = teacherCourses.value.filter(
                 tc => tc.teacher_id !== updatedTeacher.id
@@ -540,7 +540,7 @@ export const useDataStore = defineStore('data', () => {
                     });
                 }
             }
-            const { place, ...basicInfo } = updatedCourse;
+            const { place: _place, ...basicInfo } = updatedCourse;
             courses.value[index] = { ...courses.value[index], ...basicInfo };
 
             courseVenues.value = courseVenues.value.filter(cv => cv.course_id !== updatedCourse.id);
@@ -634,15 +634,10 @@ export const useDataStore = defineStore('data', () => {
     };
 
     const updateCampusScheduleDensity = (campusId, dayId, timeId, count) => {
-        const campus = campuses.value.find(c => c.id === campusId);
-        const dayObj = day.value.find(d => d.id === dayId);
-        const timeObj = time.value.find(t => t.id === timeId);
-        const targetDesc = `${campus?.name || '未知校区'} (${dayObj?.value || '未知日期'} ${timeObj?.value || '未知时段'})`;
         const densityIndex = scheduleDensity.value.findIndex(
             d => d.campus_id === campusId && d.day_id === dayId && d.time_id === timeId
         );
 
-        const oldCount = densityIndex !== -1 ? scheduleDensity.value[densityIndex].count : 0;
         const newCount = Math.max(0, count || 0);
 
         if (densityIndex !== -1) {

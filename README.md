@@ -45,21 +45,29 @@
 ### 运行环境
 - Windows 10+
 - WebView2 Runtime
+- uv（Python / 工具管理；`just` 通过 `uv tool install rust-just` 安装）
 
 ## 快速开始
 
+首次使用先安装命令入口：
+
 ```bash
-npm --prefix frontend install
-uv --directory solver sync
-uv --directory solver run pyinstaller solver.spec
-go build ./...
-wails dev
+uv tool install rust-just
+```
+
+如果不想安装到 PATH，也可以用 `uvx --from rust-just just <recipe>` 临时运行任意配方。
+
+```bash
+just install
+just build-solver
+just build-go
+just dev
 ```
 
 生产构建：
 
 ```bash
-wails build -nsis
+just package
 ```
 
 构建产物输出目录：`build/bin/`。CI 上传 `*-installer.exe` 安装包；安装包默认安装到当前用户目录 `%LOCALAPPDATA%\Programs\course-scheduler`。
@@ -217,16 +225,18 @@ uv --directory solver run pyinstaller solver.spec
 ### 常用命令
 
 ```bash
-npm --prefix frontend run build
-uv --directory solver run pyinstaller solver.spec
-go build ./...
-wails dev
-wails build -nsis
+just build-frontend
+just build-solver
+just build-go
+just lint
+just dev
+just package
 ```
 
 ### CI
 
 Windows CI 位于 `.github/workflows/build.yml`，当前按 Wails 目录结构执行：
+CI 仍直接调用底层命令，不依赖 `just`。
 
 ```bash
 npm --prefix frontend ci
@@ -249,10 +259,11 @@ wails build -nsis
 
 ### 手动验证建议
 
-- 前端改动后运行 `npm --prefix frontend run build`
-- 求解器 / 数据模型改动后运行 `uv --directory solver run pyinstaller solver.spec`
-- Go / Wails 改动后运行 `go build ./...`
-- 打包验证运行 `wails build -nsis`
+- 前端改动后运行 `just build-frontend`
+- 求解器 / 数据模型改动后运行 `just build-solver`，必要时再运行 `just build-go`
+- Go / Wails 改动后运行 `just build-go`
+- lint / 格式检查运行 `just lint`
+- 打包验证运行 `just package`
 
 ## 许可证
 

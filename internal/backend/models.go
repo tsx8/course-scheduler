@@ -134,5 +134,3 @@ type legacyTeacher struct {
 type legacyTeacherPayload struct {
 	Teachers []legacyTeacher `json:"teachers"`
 }
-
-type rawJSON = json.RawMessage

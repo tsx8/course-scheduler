@@ -38,7 +38,7 @@ func (a *App) ImportDatabase(filePath string) (ImportStats, error) {
 	if err != nil {
 		return ImportStats{}, fmt.Errorf("open source database: %w", err)
 	}
-	defer sourceDB.Close()
+	defer func() { _ = sourceDB.Close() }()
 
 	requiredTables := []string{
 		"time_slots",
@@ -84,7 +84,7 @@ func (a *App) ExportDatabase(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("open target database: %w", err)
 	}
-	defer targetDB.Close()
+	defer func() { _ = targetDB.Close() }()
 
 	if err := initDatabase(targetDB); err != nil {
 		return fmt.Errorf("init target schema: %w", err)
@@ -99,7 +99,7 @@ func (a *App) ExportDatabase(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("begin target export transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if err := writeAllDataToTables(tx, allData, false); err != nil {
 		return err

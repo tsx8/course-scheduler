@@ -45,8 +45,8 @@ func (a *App) RunSolver() (AllData, error) {
 	if err := os.WriteFile(inputPath, inputContent, 0o644); err != nil {
 		return AllData{}, fmt.Errorf("write solver input: %w", err)
 	}
-	defer os.Remove(inputPath)
-	defer os.Remove(outputPath)
+	defer func() { _ = os.Remove(inputPath) }()
+	defer func() { _ = os.Remove(outputPath) }()
 
 	solverPath, err := a.resolveSolverPath()
 	if err != nil {
@@ -130,19 +130,23 @@ func (a *App) resolveSolverPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("solver binary missing; run uv --directory solver run pyinstaller solver.spec first")
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	targetPath := filepath.Join(a.dataDir, binaryName)
 	writer, err := os.Create(targetPath)
 	if err != nil {
 		return "", fmt.Errorf("create extracted solver: %w", err)
 	}
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 
 	if _, err := io.Copy(writer, reader); err != nil {
 		return "", fmt.Errorf("extract solver binary: %w", err)
 	}
-	if err := writer.Chmod(0o755); err != nil && goruntime.GOOS != "windows" {
+	if err := writer.Close(); err != nil {
+		return "", fmt.Errorf("close extracted solver: %w", err)
+	}
+	writer = nil
+	if err := os.Chmod(targetPath, 0o755); err != nil && goruntime.GOOS != "windows" {
 		return "", fmt.Errorf("set solver permissions: %w", err)
 	}
 

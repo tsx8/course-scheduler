@@ -40,7 +40,7 @@ func (a *App) SaveTempData(content AllData) error {
 	if err != nil {
 		return fmt.Errorf("begin temp transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if err := writeAllDataToTables(tx, content, true); err != nil {
 		return err
@@ -61,7 +61,7 @@ func (a *App) CommitData() error {
 	if err != nil {
 		return fmt.Errorf("begin commit transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	content, err := loadAllDataFromConnection(tx, true)
 	if err != nil {
@@ -84,7 +84,6 @@ func (a *App) CommitData() error {
 func (a *App) ClearTempData() error {
 	return clearAllTempTables(a.db)
 }
-
 
 func (a *App) ListCommittedTeachers() ([]Teacher, error) {
 	return loadTeachers(a.db, false)
@@ -200,7 +199,7 @@ func loadTimeSlots(conn queryExecutor, useTemp bool) ([]TimeSlot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	slots := []TimeSlot{}
 	for rows.Next() {
@@ -219,7 +218,7 @@ func loadDays(conn queryExecutor, useTemp bool) ([]Day, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	days := []Day{}
 	for rows.Next() {
@@ -238,7 +237,7 @@ func loadCampuses(conn queryExecutor, useTemp bool) ([]Campus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	campuses := []Campus{}
 	for rows.Next() {
@@ -257,7 +256,7 @@ func loadVenues(conn queryExecutor, useTemp bool) ([]Venue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	venues := []Venue{}
 	for rows.Next() {
@@ -276,7 +275,7 @@ func loadCourses(conn queryExecutor, useTemp bool) ([]Course, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	courses := []Course{}
 	for rows.Next() {
@@ -295,7 +294,7 @@ func loadCourseVenues(conn queryExecutor, useTemp bool) ([]CourseVenue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	relations := []CourseVenue{}
 	for rows.Next() {
@@ -314,7 +313,7 @@ func loadTeachers(conn queryExecutor, useTemp bool) ([]Teacher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	teachers := []Teacher{}
 	for rows.Next() {
@@ -341,7 +340,7 @@ func columnExists(conn queryExecutor, table string, column string) (bool, error)
 	if err != nil {
 		return false, fmt.Errorf("inspect columns for %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var cid int
@@ -421,7 +420,7 @@ func loadTeacherCampusesFromLegacy(conn queryExecutor, useTemp bool) ([]TeacherC
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", campusTable, err)
 	}
-	defer campusRows.Close()
+	defer func() { _ = campusRows.Close() }()
 
 	var campuses []Campus
 	for campusRows.Next() {
@@ -451,7 +450,7 @@ func loadTeacherCampusesFromLegacy(conn queryExecutor, useTemp bool) ([]TeacherC
 	if err != nil {
 		return nil, fmt.Errorf("query legacy teacher campuses: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	relations := []TeacherCampus{}
 	for rows.Next() {
@@ -528,7 +527,7 @@ func loadTeacherCampuses(conn queryExecutor, useTemp bool) ([]TeacherCampus, err
 		if err != nil {
 			return nil, fmt.Errorf("query %s: %w", table, err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		relations := []TeacherCampus{}
 		for rows.Next() {
@@ -555,7 +554,7 @@ func loadTeacherCourses(conn queryExecutor, useTemp bool) ([]TeacherCourse, erro
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	relations := []TeacherCourse{}
 	for rows.Next() {
@@ -607,7 +606,7 @@ func loadScheduledClasses(conn queryExecutor, useTemp bool) ([]ScheduledClass, e
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	classes := []ScheduledClass{}
 	for rows.Next() {
@@ -630,7 +629,7 @@ func loadTeacherUnavailability(conn queryExecutor, useTemp bool) ([]TeacherUnava
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	unavailability := []TeacherUnavailability{}
 	for rows.Next() {
@@ -649,7 +648,7 @@ func loadScheduleDensity(conn queryExecutor, useTemp bool) ([]ScheduleDensity, e
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	density := []ScheduleDensity{}
 	for rows.Next() {

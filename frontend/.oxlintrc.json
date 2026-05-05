@@ -1,0 +1,32 @@
+{
+    "$schema": "./node_modules/oxlint/configuration_schema.json",
+    "categories": {
+        "correctness": "error",
+        "suspicious": "error",
+        "perf": "off",
+        "pedantic": "off",
+        "style": "off",
+        "restriction": "off",
+        "nursery": "off"
+    },
+    "env": {
+        "browser": true,
+        "es2024": true,
+        "node": true
+    },
+    "ignorePatterns": [
+        "dist/**",
+        "wailsjs/**",
+        "node_modules/**",
+        "playwright-report/**",
+        "test-results/**"
+    ],
+    "rules": {
+        "eslint/no-shadow": "off",
+        "no-console": "off",
+        "no-debugger": "error",
+        "unicorn/consistent-function-scoping": "off",
+        "unicorn/no-array-sort": "off",
+        "unicorn/no-useless-fallback-in-spread": "off"
+    }
+}
