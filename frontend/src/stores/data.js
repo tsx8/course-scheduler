@@ -2,15 +2,24 @@ import { defineStore } from 'pinia';
 import { ref, watch, toRaw, computed } from 'vue';
 import { invoke, listen, emit } from '../host/desktop';
 import { v4 as uuidv4 } from 'uuid';
+import { buildScheduleDiagnostics } from './scheduleDiagnostics';
 
 function debounce(fn, delay) {
     let timeoutId = null;
-    return function (...args) {
+    const debounced = function (...args) {
         clearTimeout(timeoutId);
         timeoutId = setTimeout(() => {
+            timeoutId = null;
             fn(...args);
         }, delay);
     };
+    debounced.cancel = () => {
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+        }
+    };
+    return debounced;
 }
 
 export const useDataStore = defineStore('data', () => {
@@ -31,11 +40,14 @@ export const useDataStore = defineStore('data', () => {
     const scheduledClasses = ref([]);
     const teacherUnavailability = ref([]);
     const scheduleDensity = ref([]);
+    const focusedScheduleTarget = ref(null);
+    let focusClearTimer = null;
 
     const resetState = () => {
         selectedCampusIdForCampusView.value = null;
         selectedTeacherIdForTeacherView.value = null;
         selectedVenueIdForCampusView.value = null;
+        clearScheduleFocus();
 
         hasUnsavedChanges.value = false;
         isSolving.value = false;
@@ -51,18 +63,181 @@ export const useDataStore = defineStore('data', () => {
 
         return selectedIds.length > 0 ? selectedIds : [...validCampusIds];
     };
+    const booleanOrDefault = (value, defaultValue) => {
+        if (value === undefined || value === null) return defaultValue;
+        if (typeof value === 'string') return value.toLowerCase() === 'true';
+        return Boolean(value);
+    };
+
+    const integerOrDefault = (value, defaultValue) => {
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.trunc(number) : defaultValue;
+    };
+
+    const nextStagedOrder = () => {
+        return scheduledClasses.value.reduce((maxOrder, schedule) => {
+            return schedule.is_staged ? Math.max(maxOrder, integerOrDefault(schedule.staged_order, 0)) : maxOrder;
+        }, 0) + 1;
+    };
+
+    const normalizeSchedule = (schedule, defaults = {}) => {
+        const isStaged = booleanOrDefault(schedule?.is_staged, defaults.is_staged ?? false);
+        const stagedOrder = integerOrDefault(schedule?.staged_order, defaults.staged_order ?? 0);
+
+        return {
+            ...schedule,
+            is_locked: booleanOrDefault(schedule?.is_locked, defaults.is_locked ?? true),
+            is_staged: isStaged,
+            staged_order: isStaged ? stagedOrder : 0
+        };
+    };
+
+    const activeScheduledClasses = computed(() => scheduledClasses.value.filter(schedule => !schedule.is_staged));
+
+    const stagedScheduledClasses = computed(() => {
+        return scheduledClasses.value
+            .filter(schedule => schedule.is_staged)
+            .slice()
+            .sort((a, b) => integerOrDefault(a.staged_order, 0) - integerOrDefault(b.staged_order, 0));
+    });
+
+    const getScheduleIndex = (scheduleId) => {
+        return scheduledClasses.value.findIndex(schedule => schedule.id === scheduleId);
+    };
+
+    const getScheduleFields = (target = {}, fieldNames = []) => {
+        const fields = {};
+        fieldNames.forEach(field => {
+            if (target[field] !== undefined) {
+                fields[field] = target[field];
+            }
+        });
+        return fields;
+    };
+
+    const getScheduleTargetFields = (target = {}) => {
+        return getScheduleFields(target, ['teacher_id', 'campus_id', 'venue_id', 'day_id', 'time_id']);
+    };
+
+    const getSchedulePositionFields = (target = {}, fieldNames = ['teacher_id', 'campus_id', 'venue_id', 'day_id', 'time_id']) => {
+        return getScheduleFields(target, fieldNames);
+    };
+
+    const resolveInstallTargetFields = (targetSchedule, target = {}) => {
+        const explicitTarget = getScheduleTargetFields(target);
+        return Object.keys(explicitTarget).length > 0 ? explicitTarget : getScheduleTargetFields(targetSchedule);
+    };
 
     const selectedCampusIdForCampusView = ref(null);
     const selectedTeacherIdForTeacherView = ref(null);
     const selectedVenueIdForCampusView = ref(null);
 
+    const diagnosticsData = computed(() => ({
+        teachers: teachers.value,
+        courses: courses.value,
+        campuses: campuses.value,
+        venues: venues.value,
+        time: time.value,
+        day: day.value,
+        course_venues: courseVenues.value,
+        teacher_courses: teacherCourses.value,
+        teacher_campuses: teacherCampuses.value,
+        scheduled_classes: scheduledClasses.value,
+        teacher_unavailability: teacherUnavailability.value,
+        schedule_density: scheduleDensity.value
+    }));
+
+    const scheduleIssues = computed(() => buildScheduleDiagnostics(diagnosticsData.value));
+
+    const issueCounts = computed(() => {
+        return scheduleIssues.value.reduce((counts, issue) => {
+            counts.total += 1;
+            counts[issue.severity] = (counts[issue.severity] || 0) + 1;
+            return counts;
+        }, { total: 0, error: 0, warning: 0, info: 0 });
+    });
+
+    const issuesByScheduleId = computed(() => {
+        const issueMap = new Map();
+        scheduleIssues.value.forEach(issue => {
+            issue.schedule_ids.forEach(scheduleId => {
+                if (!issueMap.has(scheduleId)) {
+                    issueMap.set(scheduleId, []);
+                }
+                issueMap.get(scheduleId).push(issue);
+            });
+        });
+        return issueMap;
+    });
+
+    const issuesByCampusCell = computed(() => {
+        const issueMap = new Map();
+        scheduleIssues.value.forEach(issue => {
+            if (!issue.campus_id || !issue.day_id || !issue.time_id) return;
+            const key = `${issue.campus_id}-${issue.day_id}-${issue.time_id}`;
+            if (!issueMap.has(key)) {
+                issueMap.set(key, []);
+            }
+            issueMap.get(key).push(issue);
+        });
+        return issueMap;
+    });
+
+    const issuesByTeacher = computed(() => {
+        const issueMap = new Map();
+        scheduleIssues.value.forEach(issue => {
+            if (!issue.teacher_id) return;
+            if (!issueMap.has(issue.teacher_id)) {
+                issueMap.set(issue.teacher_id, []);
+            }
+            issueMap.get(issue.teacher_id).push(issue);
+        });
+        return issueMap;
+    });
+
+    const issuesByTeacherCell = computed(() => {
+        const issueMap = new Map();
+        scheduleIssues.value.forEach(issue => {
+            if (!issue.teacher_id || !issue.day_id || !issue.time_id) return;
+            const key = `${issue.teacher_id}-${issue.day_id}-${issue.time_id}`;
+            if (!issueMap.has(key)) {
+                issueMap.set(key, []);
+            }
+            issueMap.get(key).push(issue);
+        });
+        return issueMap;
+    });
+
+    const clearFocusTimer = () => {
+        if (!focusClearTimer) return;
+        globalThis.clearTimeout(focusClearTimer);
+        focusClearTimer = null;
+    };
+
+    const clearScheduleFocus = () => {
+        clearFocusTimer();
+        focusedScheduleTarget.value = null;
+    };
+
+    const setScheduleFocus = (focus, options = {}) => {
+        clearFocusTimer();
+        focusedScheduleTarget.value = focus ? { ...focus } : null;
+
+        const durationMs = Number(options.durationMs ?? 6000);
+        if (focus && Number.isFinite(durationMs) && durationMs > 0) {
+            focusClearTimer = globalThis.setTimeout(() => {
+                focusedScheduleTarget.value = null;
+                focusClearTimer = null;
+            }, durationMs);
+        }
+    };
     const syncUnsavedStatus = async () => {
         const status = await invoke('has_unsaved_changes');
         hasUnsavedChanges.value = status;
         console.log("Current Unsaved Status:", status);
     };
 
-    const debouncedSave = debounce(async (data) => {
+    const persistTempData = async (data, { throwOnError = false } = {}) => {
         console.log('Saving temp data to backend...');
         try {
             const rawData = {
@@ -83,8 +258,35 @@ export const useDataStore = defineStore('data', () => {
             console.log('Temp data saved successfully.');
         } catch (error) {
             console.error('Failed to save temp data:', error);
+            if (throwOnError) throw error;
         }
+    };
+
+    const currentPersistenceState = () => ({
+        teachers: teachers.value,
+        courses: courses.value,
+        campuses: campuses.value,
+        venues: venues.value,
+        time: time.value,
+        day: day.value,
+        courseVenues: courseVenues.value,
+        teacherCourses: teacherCourses.value,
+        teacherCampuses: teacherCampuses.value,
+        scheduledClasses: scheduledClasses.value,
+        teacherUnavailability: teacherUnavailability.value,
+        scheduleDensity: scheduleDensity.value
+    });
+
+    const debouncedSave = debounce((data) => {
+        persistTempData(data);
     }, 100);
+
+    const flushPendingChanges = async () => {
+        debouncedSave.cancel?.();
+        if (!isInitialized.value || isReverting.value) return;
+        await persistTempData(currentPersistenceState(), { throwOnError: true });
+        await syncUnsavedStatus();
+    };
 
     const initializeData = async () => {
         if (isInitialized.value) return;
@@ -141,7 +343,11 @@ export const useDataStore = defineStore('data', () => {
         courseVenues.value = newData.course_venues || [];
         teacherCourses.value = newData.teacher_courses || [];
         teacherCampuses.value = newData.teacher_campuses || [];
-        scheduledClasses.value = newData.scheduled_classes || [];
+        scheduledClasses.value = (newData.scheduled_classes || []).map(schedule => normalizeSchedule(schedule, {
+            is_locked: true,
+            is_staged: false,
+            staged_order: 0
+        }));
         teacherUnavailability.value = newData.teacher_unavailability || [];
         scheduleDensity.value = newData.schedule_density || [];
         syncUnsavedStatus();
@@ -164,7 +370,7 @@ export const useDataStore = defineStore('data', () => {
     });
 
     const scheduledClassesByTeacher = computed(() => (teacherId) => {
-        return scheduledClasses.value.filter(sc => sc.teacher_id === teacherId);
+        return activeScheduledClasses.value.filter(sc => sc.teacher_id === teacherId);
     });
 
     const teacherUnavailabilityByTeacher = computed(() => (teacherId) => {
@@ -231,11 +437,14 @@ export const useDataStore = defineStore('data', () => {
 
         if (teacherData.scheduled && Array.isArray(teacherData.scheduled)) {
             teacherData.scheduled.forEach(schedule => {
-                scheduledClasses.value.push({
+                scheduledClasses.value.push(normalizeSchedule({
                     ...schedule,
                     id: schedule.id || uuidv4(),
-                    teacher_id: newTeacher.id
-                });
+                    teacher_id: newTeacher.id,
+                    is_locked: schedule.is_locked ?? true,
+                    is_staged: schedule.is_staged === true,
+                    staged_order: schedule.is_staged === true ? (schedule.staged_order ?? nextStagedOrder()) : 0
+                }));
             });
         }
     };
@@ -459,12 +668,24 @@ export const useDataStore = defineStore('data', () => {
 
     const teacherOptions = computed(() => teachers.value.map(t => ({ label: t.name, value: t.id })));
 
-    const getScheduleMapForTeacher = computed(() => (teacherId) => {
-        const schedules = scheduledClasses.value.filter(sc => sc.teacher_id === teacherId);
+    const getScheduleListMapForTeacher = computed(() => (teacherId) => {
+        const schedules = activeScheduledClasses.value.filter(sc => sc.teacher_id === teacherId);
         const scheduleMap = new Map();
         schedules.forEach(s => {
             const key = `${s.day_id}-${s.time_id}`;
-            scheduleMap.set(key, s);
+            if (!scheduleMap.has(key)) {
+                scheduleMap.set(key, []);
+            }
+            scheduleMap.get(key).push(s);
+        });
+        return scheduleMap;
+    });
+
+    const getScheduleMapForTeacher = computed(() => (teacherId) => {
+        const listMap = getScheduleListMapForTeacher.value(teacherId);
+        const scheduleMap = new Map();
+        listMap.forEach((schedules, key) => {
+            scheduleMap.set(key, schedules[0]);
         });
         return scheduleMap;
     });
@@ -486,7 +707,7 @@ export const useDataStore = defineStore('data', () => {
         if (!campusId) return new Map();
 
         const scheduleMap = new Map();
-        const filteredSchedules = scheduledClasses.value.filter(schedule => {
+        const filteredSchedules = activeScheduledClasses.value.filter(schedule => {
             const campusMatch = schedule.campus_id === campusId;
             const venueMatch = !venueId || schedule.venue_id === venueId;
             return campusMatch && venueMatch;
@@ -538,17 +759,133 @@ export const useDataStore = defineStore('data', () => {
             .map(venue => ({ label: venue.name, value: venue.id }));
     });
 
-    const addSchedule = (teacherId, scheduleData) => {
+    const addSchedule = (teacherId, scheduleData = {}) => {
         const newId = uuidv4();
-        const newSchedule = { ...scheduleData, id: newId, teacher_id: teacherId };
+        const isStaged = scheduleData.is_staged === true;
+        const newSchedule = normalizeSchedule({
+            ...scheduleData,
+            id: newId,
+            teacher_id: teacherId,
+            is_locked: true,
+            is_staged: isStaged,
+            staged_order: isStaged ? (scheduleData.staged_order ?? nextStagedOrder()) : 0
+        });
         scheduledClasses.value.push(newSchedule);
     };
 
     const updateSchedule = (teacherId, updatedSchedule) => {
-        const index = scheduledClasses.value.findIndex(s => s.id === updatedSchedule.id);
+        const index = getScheduleIndex(updatedSchedule.id);
         if (index !== -1) {
-            scheduledClasses.value[index] = { ...scheduledClasses.value[index], ...updatedSchedule, teacher_id: teacherId };
+            const isStaged = updatedSchedule.is_staged === true;
+            scheduledClasses.value[index] = normalizeSchedule({
+                ...scheduledClasses.value[index],
+                ...updatedSchedule,
+                teacher_id: teacherId,
+                is_locked: updatedSchedule.is_locked ?? true,
+                is_staged: isStaged,
+                staged_order: isStaged ? (updatedSchedule.staged_order ?? nextStagedOrder()) : 0
+            });
         }
+    };
+
+    const setScheduleLocked = (scheduleId, isLocked) => {
+        const index = getScheduleIndex(scheduleId);
+        if (index !== -1) {
+            scheduledClasses.value[index] = normalizeSchedule({
+                ...scheduledClasses.value[index],
+                is_locked: isLocked
+            });
+        }
+    };
+
+    const stageSchedule = (scheduleId) => {
+        const index = getScheduleIndex(scheduleId);
+        if (index === -1) return null;
+
+        const stagedSchedule = normalizeSchedule({
+            ...scheduledClasses.value[index],
+            is_staged: true,
+            staged_order: nextStagedOrder()
+        });
+        scheduledClasses.value[index] = stagedSchedule;
+        return stagedSchedule;
+    };
+
+    const installSchedule = (sourceScheduleId, target = {}) => {
+        const index = getScheduleIndex(sourceScheduleId);
+        if (index === -1) return null;
+
+        const isStaged = target.is_staged === true;
+        const installedSchedule = normalizeSchedule({
+            ...scheduledClasses.value[index],
+            ...getScheduleTargetFields(target),
+            is_locked: target.is_locked ?? true,
+            is_staged: isStaged,
+            staged_order: isStaged ? (target.staged_order ?? nextStagedOrder()) : 0
+        });
+        scheduledClasses.value[index] = installedSchedule;
+        return installedSchedule;
+    };
+
+    const swapSchedules = (sourceScheduleId, targetScheduleId, placementFields = ['teacher_id', 'campus_id', 'venue_id', 'day_id', 'time_id']) => {
+        const sourceIndex = getScheduleIndex(sourceScheduleId);
+        const targetIndex = getScheduleIndex(targetScheduleId);
+        if (sourceIndex === -1 || targetIndex === -1) return null;
+        if (sourceIndex === targetIndex) return scheduledClasses.value[sourceIndex];
+
+        const sourceSchedule = scheduledClasses.value[sourceIndex];
+        const targetSchedule = scheduledClasses.value[targetIndex];
+        const sourcePosition = getSchedulePositionFields(sourceSchedule, placementFields);
+        const targetPosition = getSchedulePositionFields(targetSchedule, placementFields);
+
+        scheduledClasses.value[sourceIndex] = normalizeSchedule({
+            ...sourceSchedule,
+            ...targetPosition,
+            is_locked: true,
+            is_staged: false,
+            staged_order: 0
+        });
+        scheduledClasses.value[targetIndex] = normalizeSchedule({
+            ...targetSchedule,
+            ...sourcePosition,
+            is_locked: true,
+            is_staged: false,
+            staged_order: 0
+        });
+
+        return [scheduledClasses.value[sourceIndex], scheduledClasses.value[targetIndex]];
+    };
+
+    const replaceSchedule = (sourceScheduleId, targetScheduleId, target = {}) => {
+        const sourceIndex = getScheduleIndex(sourceScheduleId);
+        const targetIndex = getScheduleIndex(targetScheduleId);
+        if (sourceIndex === -1 || targetIndex === -1) return null;
+        if (sourceIndex === targetIndex) return scheduledClasses.value[sourceIndex];
+
+        const targetSchedule = scheduledClasses.value[targetIndex];
+        const installedSchedule = installSchedule(sourceScheduleId, {
+            ...resolveInstallTargetFields(targetSchedule, target),
+            is_staged: false,
+            staged_order: 0
+        });
+        scheduledClasses.value = scheduledClasses.value.filter(schedule => schedule.id !== targetScheduleId);
+        return installedSchedule;
+    };
+
+    const displaceSchedule = (sourceScheduleId, targetScheduleId, target = {}) => {
+        const sourceIndex = getScheduleIndex(sourceScheduleId);
+        const targetIndex = getScheduleIndex(targetScheduleId);
+        if (sourceIndex === -1 || targetIndex === -1) return null;
+        if (sourceIndex === targetIndex) return scheduledClasses.value[sourceIndex];
+
+        const targetSchedule = scheduledClasses.value[targetIndex];
+        const installedSchedule = installSchedule(sourceScheduleId, {
+            ...resolveInstallTargetFields(targetSchedule, target),
+            is_staged: false,
+            staged_order: 0
+        });
+        stageSchedule(targetScheduleId);
+        return installedSchedule;
     };
 
     const deleteSchedule = (scheduleId) => {
@@ -614,14 +951,26 @@ export const useDataStore = defineStore('data', () => {
         teacherCourses,
         teacherCampuses,
         scheduledClasses,
+        activeScheduledClasses,
+        stagedScheduledClasses,
         teacherUnavailability,
         scheduleDensity,
+        scheduleIssues,
+        issueCounts,
+        issuesByScheduleId,
+        issuesByCampusCell,
+        issuesByTeacher,
+        issuesByTeacherCell,
+        focusedScheduleTarget,
+        setScheduleFocus,
+        clearScheduleFocus,
         initializeData,
         replaceAllData,
         revertChanges,
         commitChanges,
         hasUnsavedChanges,
         syncUnsavedStatus,
+        flushPendingChanges,
         resetState,
 
         getUnavailableMapForTeacher,
@@ -660,6 +1009,7 @@ export const useDataStore = defineStore('data', () => {
 
         teacherOptions,
         getScheduleMapForTeacher,
+        getScheduleListMapForTeacher,
         getScheduledClassesByCampus,
         teacherCourseOptions,
         courseCampusOptions,
@@ -667,6 +1017,12 @@ export const useDataStore = defineStore('data', () => {
         addSchedule,
         updateSchedule,
         deleteSchedule,
+        setScheduleLocked,
+        stageSchedule,
+        installSchedule,
+        swapSchedules,
+        replaceSchedule,
+        displaceSchedule,
 
         addTimeSlot,
         updateTimeSlot,

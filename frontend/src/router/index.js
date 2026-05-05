@@ -20,6 +20,12 @@ const routes = [
         meta: { title: '教师个人课表' }
       },
       {
+        path: 'schedule-issues',
+        name: 'ScheduleIssues',
+        component: () => import('../pages/ScheduleIssues.vue'),
+        meta: { title: '问题检查' }
+      },
+      {
         path: 'teacher-management',
         name: 'TeacherManagement',
         component: () => import('../pages/TeacherManagement.vue'),

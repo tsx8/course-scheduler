@@ -1,0 +1,348 @@
+const ISSUE_SEVERITY = {
+    ERROR: 'error',
+    WARNING: 'warning',
+    INFO: 'info'
+};
+
+const UNKNOWN = {
+    teacher: '未知教师',
+    course: '未知课程',
+    campus: '未知校区',
+    venue: '未知场地',
+    day: '未知日期',
+    time: '未知时段'
+};
+
+const sortIds = (ids) => [...new Set(ids.filter(Boolean))].sort();
+
+const byId = (items = []) => new Map(items.map(item => [item.id, item]));
+
+const nameOf = (map, id, fallback) => map.get(id)?.name || map.get(id)?.value || fallback;
+
+
+const relationKey = (...parts) => parts.map(part => part || '').join('::');
+
+const createIssue = ({
+    category,
+    severity = ISSUE_SEVERITY.ERROR,
+    message,
+    scheduleIds = [],
+    teacherId = null,
+    courseId = null,
+    campusId = null,
+    venueId = null,
+    dayId = null,
+    timeId = null,
+    targetRoute = null,
+    focus = null
+}) => ({
+    id: [category, teacherId, courseId, campusId, venueId, dayId, timeId, ...sortIds(scheduleIds)]
+        .filter(value => value !== null && value !== undefined && value !== '')
+        .join('|'),
+    severity,
+    category,
+    message,
+    schedule_ids: sortIds(scheduleIds),
+    teacher_id: teacherId,
+    course_id: courseId,
+    campus_id: campusId,
+    venue_id: venueId,
+    day_id: dayId,
+    time_id: timeId,
+    target_route: targetRoute || (teacherId ? 'TeacherTimetable' : (campusId ? 'CampusTimetable' : null)),
+    focus
+});
+
+const scheduleFocus = (schedule) => ({
+    schedule_id: schedule.id,
+    teacher_id: schedule.teacher_id,
+    course_id: schedule.course_id,
+    campus_id: schedule.campus_id,
+    venue_id: schedule.venue_id,
+    day_id: schedule.day_id,
+    time_id: schedule.time_id
+});
+
+export function buildScheduleDiagnostics(data = {}) {
+    const teachers = data.teachers || [];
+    const courses = data.courses || [];
+    const campuses = data.campuses || [];
+    const venues = data.venues || [];
+    const days = data.day || [];
+    const times = data.time || [];
+    const courseVenues = data.course_venues || [];
+    const teacherCourses = data.teacher_courses || [];
+    const teacherCampuses = data.teacher_campuses || [];
+    const scheduledClasses = data.scheduled_classes || [];
+    const teacherUnavailability = data.teacher_unavailability || [];
+    const scheduleDensity = data.schedule_density || [];
+
+    const teacherMap = byId(teachers);
+    const courseMap = byId(courses);
+    const campusMap = byId(campuses);
+    const venueMap = byId(venues);
+    const dayMap = byId(days);
+    const timeMap = byId(times);
+
+    const teacherCourseSet = new Set(teacherCourses.map(rel => relationKey(rel.teacher_id, rel.course_id)));
+    const courseVenueSet = new Set(courseVenues.map(rel => relationKey(rel.course_id, rel.venue_id)));
+    const teacherCampusSet = new Set(teacherCampuses.map(rel => relationKey(rel.teacher_id, rel.campus_id)));
+    const teacherCampusCounts = teacherCampuses.reduce((counts, rel) => {
+        counts.set(rel.teacher_id, (counts.get(rel.teacher_id) || 0) + 1);
+        return counts;
+    }, new Map());
+    const unavailableSet = new Set(teacherUnavailability.map(rel => relationKey(rel.teacher_id, rel.day_id, rel.time_id)));
+
+    const issues = [];
+    const activeSchedules = scheduledClasses.filter(schedule => schedule.is_staged !== true);
+    const stagedSchedules = scheduledClasses.filter(schedule => schedule.is_staged === true);
+
+    const labelSchedule = (schedule) => {
+        const teacherName = nameOf(teacherMap, schedule.teacher_id, UNKNOWN.teacher);
+        const courseName = nameOf(courseMap, schedule.course_id, UNKNOWN.course);
+        const dayName = nameOf(dayMap, schedule.day_id, UNKNOWN.day);
+        const timeName = nameOf(timeMap, schedule.time_id, UNKNOWN.time);
+        return `${teacherName} / ${courseName} / ${dayName} ${timeName}`;
+    };
+
+    const pushScheduleIssue = (schedule, category, severity, message) => {
+        issues.push(createIssue({
+            category,
+            severity,
+            message,
+            scheduleIds: [schedule.id],
+            teacherId: schedule.teacher_id,
+            courseId: schedule.course_id,
+            campusId: schedule.campus_id,
+            venueId: schedule.venue_id,
+            dayId: schedule.day_id,
+            timeId: schedule.time_id,
+            focus: scheduleFocus(schedule)
+        }));
+    };
+
+    stagedSchedules.forEach(schedule => {
+        pushScheduleIssue(
+            schedule,
+            'staged_schedule_info',
+            ISSUE_SEVERITY.INFO,
+            `${labelSchedule(schedule)} 已暂存，未参与当前课表冲突检查。`
+        );
+    });
+
+    activeSchedules.forEach(schedule => {
+        if (schedule.is_locked === true) {
+            pushScheduleIssue(
+                schedule,
+                'locked_schedule_info',
+                ISSUE_SEVERITY.INFO,
+                `${labelSchedule(schedule)} 已锁定。`
+            );
+        }
+
+        if (!teacherCourseSet.has(relationKey(schedule.teacher_id, schedule.course_id))) {
+            pushScheduleIssue(
+                schedule,
+                'teacher_course_mismatch',
+                ISSUE_SEVERITY.ERROR,
+                `${nameOf(teacherMap, schedule.teacher_id, UNKNOWN.teacher)} 未配置可教授 ${nameOf(courseMap, schedule.course_id, UNKNOWN.course)}。`
+            );
+        }
+
+        if ((teacherCampusCounts.get(schedule.teacher_id) || 0) > 0 && !teacherCampusSet.has(relationKey(schedule.teacher_id, schedule.campus_id))) {
+            pushScheduleIssue(
+                schedule,
+                'teacher_campus_mismatch',
+                ISSUE_SEVERITY.ERROR,
+                `${nameOf(teacherMap, schedule.teacher_id, UNKNOWN.teacher)} 未配置可在 ${nameOf(campusMap, schedule.campus_id, UNKNOWN.campus)} 上课。`
+            );
+        }
+
+        if (!courseVenueSet.has(relationKey(schedule.course_id, schedule.venue_id))) {
+            pushScheduleIssue(
+                schedule,
+                'course_venue_mismatch',
+                ISSUE_SEVERITY.ERROR,
+                `${nameOf(courseMap, schedule.course_id, UNKNOWN.course)} 未配置可使用 ${nameOf(venueMap, schedule.venue_id, UNKNOWN.venue)}。`
+            );
+        }
+
+        if (unavailableSet.has(relationKey(schedule.teacher_id, schedule.day_id, schedule.time_id))) {
+            pushScheduleIssue(
+                schedule,
+                'teacher_unavailable_conflict',
+                ISSUE_SEVERITY.ERROR,
+                `${nameOf(teacherMap, schedule.teacher_id, UNKNOWN.teacher)} 在 ${nameOf(dayMap, schedule.day_id, UNKNOWN.day)} ${nameOf(timeMap, schedule.time_id, UNKNOWN.time)} 不可授课。`
+            );
+        }
+
+        const venue = venueMap.get(schedule.venue_id);
+        if (venue && Number(venue.capacity) <= 0) {
+            pushScheduleIssue(
+                schedule,
+                'venue_capacity_warning',
+                ISSUE_SEVERITY.WARNING,
+                `${nameOf(venueMap, schedule.venue_id, UNKNOWN.venue)} 容量未设置或为 0。`
+            );
+        }
+    });
+
+    const byTeacherTime = new Map();
+    const byTeacherDay = new Map();
+    const byCampusCell = new Map();
+    const byVenueSlot = new Map();
+    const byTeacherCourseDay = new Map();
+
+    activeSchedules.forEach(schedule => {
+        const teacherTimeKey = relationKey(schedule.teacher_id, schedule.day_id, schedule.time_id);
+        const teacherDayKey = relationKey(schedule.teacher_id, schedule.day_id);
+        const campusCellKey = relationKey(schedule.campus_id, schedule.day_id, schedule.time_id);
+        const venueSlotKey = relationKey(schedule.venue_id, schedule.day_id, schedule.time_id);
+        const teacherCourseDayKey = relationKey(schedule.teacher_id, schedule.course_id, schedule.day_id);
+
+        if (!byTeacherTime.has(teacherTimeKey)) byTeacherTime.set(teacherTimeKey, []);
+        if (!byTeacherDay.has(teacherDayKey)) byTeacherDay.set(teacherDayKey, []);
+        if (!byCampusCell.has(campusCellKey)) byCampusCell.set(campusCellKey, []);
+        if (!byVenueSlot.has(venueSlotKey)) byVenueSlot.set(venueSlotKey, []);
+        if (!byTeacherCourseDay.has(teacherCourseDayKey)) byTeacherCourseDay.set(teacherCourseDayKey, []);
+
+        byTeacherTime.get(teacherTimeKey).push(schedule);
+        byTeacherDay.get(teacherDayKey).push(schedule);
+        byCampusCell.get(campusCellKey).push(schedule);
+        byVenueSlot.get(venueSlotKey).push(schedule);
+        byTeacherCourseDay.get(teacherCourseDayKey).push(schedule);
+    });
+
+    byTeacherTime.forEach(schedules => {
+        if (schedules.length <= 1) return;
+        const first = schedules[0];
+        issues.push(createIssue({
+            category: 'teacher_time_conflict',
+            severity: ISSUE_SEVERITY.ERROR,
+            message: `${nameOf(teacherMap, first.teacher_id, UNKNOWN.teacher)} 在 ${nameOf(dayMap, first.day_id, UNKNOWN.day)} ${nameOf(timeMap, first.time_id, UNKNOWN.time)} 有 ${schedules.length} 节课冲突。`,
+            scheduleIds: schedules.map(schedule => schedule.id),
+            teacherId: first.teacher_id,
+            dayId: first.day_id,
+            timeId: first.time_id,
+            focus: { teacher_id: first.teacher_id, day_id: first.day_id, time_id: first.time_id }
+        }));
+    });
+
+    byTeacherDay.forEach(schedules => {
+        const campusIds = sortIds(schedules.map(schedule => schedule.campus_id));
+        if (campusIds.length <= 1) return;
+        const first = schedules[0];
+        issues.push(createIssue({
+            category: 'teacher_day_campus_conflict',
+            severity: ISSUE_SEVERITY.ERROR,
+            message: `${nameOf(teacherMap, first.teacher_id, UNKNOWN.teacher)} 在 ${nameOf(dayMap, first.day_id, UNKNOWN.day)} 被安排到多个校区。`,
+            scheduleIds: schedules.map(schedule => schedule.id),
+            teacherId: first.teacher_id,
+            dayId: first.day_id,
+            focus: { teacher_id: first.teacher_id, day_id: first.day_id }
+        }));
+    });
+
+    byVenueSlot.forEach(schedules => {
+        const first = schedules[0];
+        const venue = venueMap.get(first.venue_id);
+        const capacity = Number(venue?.capacity || 0);
+        if (capacity <= 0 || schedules.length <= capacity) return;
+        issues.push(createIssue({
+            category: 'venue_capacity_warning',
+            severity: ISSUE_SEVERITY.WARNING,
+            message: `${nameOf(venueMap, first.venue_id, UNKNOWN.venue)} 在 ${nameOf(dayMap, first.day_id, UNKNOWN.day)} ${nameOf(timeMap, first.time_id, UNKNOWN.time)} 安排 ${schedules.length} 节，超过容量 ${capacity}。`,
+            scheduleIds: schedules.map(schedule => schedule.id),
+            campusId: first.campus_id,
+            venueId: first.venue_id,
+            dayId: first.day_id,
+            timeId: first.time_id,
+            focus: { campus_id: first.campus_id, venue_id: first.venue_id, day_id: first.day_id, time_id: first.time_id }
+        }));
+    });
+
+
+    byTeacherCourseDay.forEach(schedules => {
+        if (schedules.length <= 1) return;
+        const first = schedules[0];
+        issues.push(createIssue({
+            category: 'course_concentration_warning',
+            severity: ISSUE_SEVERITY.WARNING,
+            message: `${nameOf(teacherMap, first.teacher_id, UNKNOWN.teacher)} 在 ${nameOf(dayMap, first.day_id, UNKNOWN.day)} 集中安排了 ${schedules.length} 次 ${nameOf(courseMap, first.course_id, UNKNOWN.course)}。`,
+            scheduleIds: schedules.map(schedule => schedule.id),
+            teacherId: first.teacher_id,
+            courseId: first.course_id,
+            dayId: first.day_id,
+            focus: { teacher_id: first.teacher_id, course_id: first.course_id, day_id: first.day_id }
+        }));
+    });
+
+    teachers.forEach(teacher => {
+        const teacherSchedules = activeSchedules.filter(schedule => schedule.teacher_id === teacher.id);
+        const totalHours = teacherSchedules.reduce((total, schedule) => {
+            return total + Number(timeMap.get(schedule.time_id)?.corresponding_hours || 0);
+        }, 0);
+        const maxHours = Number(teacher.max_teaching_hours || 0);
+        if (maxHours > 0 && totalHours > maxHours) {
+            issues.push(createIssue({
+                category: 'teacher_hours_warning',
+                severity: ISSUE_SEVERITY.WARNING,
+                message: `${teacher.name || UNKNOWN.teacher} 已安排 ${totalHours} 学时，超过最大授课学时 ${maxHours}。`,
+                scheduleIds: teacherSchedules.map(schedule => schedule.id),
+                teacherId: teacher.id,
+                focus: { teacher_id: teacher.id }
+            }));
+        }
+
+        const workdayCount = new Set(teacherSchedules.map(schedule => schedule.day_id).filter(Boolean)).size;
+        if (workdayCount >= 6) {
+            issues.push(createIssue({
+                category: 'teacher_workday_warning',
+                severity: ISSUE_SEVERITY.WARNING,
+                message: `${teacher.name || UNKNOWN.teacher} 已安排 ${workdayCount} 个工作日。`,
+                scheduleIds: teacherSchedules.map(schedule => schedule.id),
+                teacherId: teacher.id,
+                focus: { teacher_id: teacher.id }
+            }));
+        }
+    });
+
+    scheduleDensity.forEach(density => {
+        const schedules = byCampusCell.get(relationKey(density.campus_id, density.day_id, density.time_id)) || [];
+        const expectedCount = Number(density.count || 0);
+        const actualCount = schedules.length;
+        if (actualCount !== expectedCount) {
+            issues.push(createIssue({
+                category: 'campus_density_warning',
+                severity: ISSUE_SEVERITY.WARNING,
+                message: `${nameOf(campusMap, density.campus_id, UNKNOWN.campus)} ${nameOf(dayMap, density.day_id, UNKNOWN.day)} ${nameOf(timeMap, density.time_id, UNKNOWN.time)} 期望 ${expectedCount} 节，实际 ${actualCount} 节。`,
+                scheduleIds: schedules.map(schedule => schedule.id),
+                campusId: density.campus_id,
+                dayId: density.day_id,
+                timeId: density.time_id,
+                focus: { campus_id: density.campus_id, day_id: density.day_id, time_id: density.time_id }
+            }));
+        }
+    });
+
+    byCampusCell.forEach((schedules, key) => {
+        const [campusId, dayId, timeId] = key.split('::');
+        const expectedDensity = scheduleDensity.find(density => (
+            density.campus_id === campusId && density.day_id === dayId && density.time_id === timeId
+        ));
+        if (!expectedDensity && schedules.length > 0) {
+            issues.push(createIssue({
+                category: 'campus_density_warning',
+                severity: ISSUE_SEVERITY.WARNING,
+                message: `${nameOf(campusMap, campusId, UNKNOWN.campus)} ${nameOf(dayMap, dayId, UNKNOWN.day)} ${nameOf(timeMap, timeId, UNKNOWN.time)} 未设置排课密度，实际 ${schedules.length} 节。`,
+                scheduleIds: schedules.map(schedule => schedule.id),
+                campusId,
+                dayId,
+                timeId,
+                focus: { campus_id: campusId, day_id: dayId, time_id: timeId }
+            }));
+        }
+    });
+
+    return issues.sort((left, right) => left.id.localeCompare(right.id));
+}
