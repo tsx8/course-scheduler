@@ -74,6 +74,7 @@ export function buildScheduleDiagnostics(data = {}) {
     const teacherCampuses = data.teacher_campuses || [];
     const scheduledClasses = data.scheduled_classes || [];
     const teacherUnavailability = data.teacher_unavailability || [];
+    const scheduleDensity = data.schedule_density || [];
 
     const teacherMap = byId(teachers);
     const courseMap = byId(courses);
@@ -90,6 +91,15 @@ export function buildScheduleDiagnostics(data = {}) {
         return counts;
     }, new Map());
     const unavailableSet = new Set(teacherUnavailability.map(rel => relationKey(rel.teacher_id, rel.day_id, rel.time_id)));
+    const expectedCampusSlotCounts = new Map();
+    scheduleDensity.forEach(density => {
+        const count = Number(density.count || 0);
+        expectedCampusSlotCounts.set(
+            relationKey(density.campus_id, density.day_id, density.time_id),
+            Math.max(0, Number.isFinite(count) ? count : 0)
+        );
+    });
+
 
     const issues = [];
     const activeSchedules = scheduledClasses.filter(schedule => schedule.is_staged !== true);
@@ -163,19 +173,25 @@ export function buildScheduleDiagnostics(data = {}) {
 
     const byTeacherTime = new Map();
     const byTeacherDay = new Map();
+    const byCampusSlot = new Map();
     const byVenueSlot = new Map();
 
     activeSchedules.forEach(schedule => {
         const teacherTimeKey = relationKey(schedule.teacher_id, schedule.day_id, schedule.time_id);
         const teacherDayKey = relationKey(schedule.teacher_id, schedule.day_id);
         const venueSlotKey = relationKey(schedule.venue_id, schedule.day_id, schedule.time_id);
+        const campusSlotKey = relationKey(schedule.campus_id, schedule.day_id, schedule.time_id);
+
 
         if (!byTeacherTime.has(teacherTimeKey)) byTeacherTime.set(teacherTimeKey, []);
         if (!byTeacherDay.has(teacherDayKey)) byTeacherDay.set(teacherDayKey, []);
         if (!byVenueSlot.has(venueSlotKey)) byVenueSlot.set(venueSlotKey, []);
+        if (!byCampusSlot.has(campusSlotKey)) byCampusSlot.set(campusSlotKey, []);
 
         byTeacherTime.get(teacherTimeKey).push(schedule);
         byTeacherDay.get(teacherDayKey).push(schedule);
+        byCampusSlot.get(campusSlotKey).push(schedule);
+
         byVenueSlot.get(venueSlotKey).push(schedule);
     });
 
@@ -206,6 +222,22 @@ export function buildScheduleDiagnostics(data = {}) {
             teacherId: first.teacher_id,
             dayId: first.day_id,
             focus: { teacher_id: first.teacher_id, day_id: first.day_id }
+        }));
+    });
+
+    byCampusSlot.forEach(schedules => {
+        const first = schedules[0];
+        const expectedCount = expectedCampusSlotCounts.get(relationKey(first.campus_id, first.day_id, first.time_id)) || 0;
+        if (schedules.length <= expectedCount) return;
+        issues.push(createIssue({
+            category: 'campus_density_overload',
+            severity: ISSUE_SEVERITY.WARNING,
+            message: `${nameOf(campusMap, first.campus_id, UNKNOWN.campus)} 在 ${nameOf(dayMap, first.day_id, UNKNOWN.day)} ${nameOf(timeMap, first.time_id, UNKNOWN.time)} 安排 ${schedules.length} 节，超过时段目标 ${expectedCount} 节。`,
+            scheduleIds: schedules.map(schedule => schedule.id),
+            campusId: first.campus_id,
+            dayId: first.day_id,
+            timeId: first.time_id,
+            focus: { campus_id: first.campus_id, day_id: first.day_id, time_id: first.time_id }
         }));
     });
 
