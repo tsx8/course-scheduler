@@ -1,6 +1,6 @@
 # Course Scheduler / 课程排课系统
 
-一个基于 `Vue 3 + Wails 2 + Go + SQLite + Python OR-Tools` 的 Windows 桌面排课应用。
+一个基于 `Vue 3 + Wails 2 + Go + SQLite + Python OR-Tools` 的 Windows / macOS 桌面排课应用。
 
 ## 特性
 
@@ -11,7 +11,7 @@
 - 教师上课校区：教师可从现有 `campuses` 中多选可上课校区，默认全选
 - 可视化课表：提供校区总课表与教师个人课表视图
 - 导入导出：支持 JSON 与 SQLite 数据导入导出
-- Windows 桌面体验：Wails 原生宿主、自定义标题栏、sidecar 求解器、可打包发布
+- 桌面体验：Wails 原生宿主、自定义标题栏、sidecar 求解器；支持 Windows 安装包与 macOS `.app` 构建
 
 ## 技术栈
 
@@ -35,7 +35,7 @@
 ## 系统要求
 
 ### 开发环境
-- Windows 10+
+- Windows 10+ 或 macOS 11+
 - Node.js 18+
 - Go 1.25+
 - Python 3.11+
@@ -43,9 +43,8 @@
 - `wails` CLI 2.10+
 
 ### 运行环境
-- Windows 10+
-- WebView2 Runtime
-- uv（Python / 工具管理；`just` 通过 `uv tool install rust-just` 安装）
+- Windows 10+（需要 WebView2 Runtime）
+- macOS 11+
 
 ## 快速开始
 
@@ -67,10 +66,11 @@ just dev
 生产构建：
 
 ```bash
-just package
+just package        # Windows NSIS installer
+just package-macos  # macOS .app
 ```
 
-构建产物输出目录：`build/bin/`。CI 上传 `*-installer.exe` 安装包；安装包默认安装到当前用户目录 `%LOCALAPPDATA%\Programs\course-scheduler`。
+构建产物输出目录：`build/bin/`。CI 上传 Windows `*-installer.exe` 安装包，以及 macOS `course-scheduler-darwin-arm64.zip` 应用包；Windows 安装包默认安装到当前用户目录 `%LOCALAPPDATA%\Programs\course-scheduler`。
 
 ## 使用流程
 
@@ -187,11 +187,14 @@ course-scheduler/
                    可撤销
 ```
 
-Windows 数据目录：
+平台数据目录：
 
-- 数据库：`%APPDATA%\com.tsxb.course-scheduler\course_scheduler.db`
-- 求解器临时输入/输出：`%APPDATA%\com.tsxb.course-scheduler\solver_input.tmp.json`、`solver_output.tmp.json`
-- 解包后的求解器：`%APPDATA%\com.tsxb.course-scheduler\solver.exe`
+- Windows 数据库：`%APPDATA%\com.tsxb.course-scheduler\course_scheduler.db`
+- Windows 求解器临时输入/输出：`%APPDATA%\com.tsxb.course-scheduler\solver_input.tmp.json`、`solver_output.tmp.json`
+- Windows 解包后的求解器：`%APPDATA%\com.tsxb.course-scheduler\solver.exe`
+- macOS 数据库：`~/Library/Application Support/com.tsxb.course-scheduler/course_scheduler.db`
+- macOS 求解器临时输入/输出：`~/Library/Application Support/com.tsxb.course-scheduler/solver_input.tmp.json`、`solver_output.tmp.json`
+- macOS 解包后的求解器：`~/Library/Application Support/com.tsxb.course-scheduler/solver`
 
 ### 3NF 设计
 
@@ -208,7 +211,7 @@ Windows 数据目录：
 求解器作为 Python sidecar 运行：
 
 1. Go 读取当前数据并序列化为 JSON
-2. Wails 宿主调用 `solver.exe`
+2. Wails 宿主调用平台对应 sidecar（Windows `solver.exe`，macOS `solver`）
 3. Python 构建 CP-SAT 模型并求解
 4. 结果写回 `_temp` 表，等待用户提交
 
@@ -218,7 +221,7 @@ Windows 数据目录：
 uv --directory solver run pyinstaller solver.spec
 ```
 
-该命令会在 `solver/` 子项目中使用 `uv` 环境执行 PyInstaller，把 `solver/solver.py` 构建到 `solver/dist/solver.exe`，并由 Go/Wails 直接以该目录作为 sidecar 单一来源。`wails build` 与 `wails build -nsis` 都会通过 `wails.json` 的 `preBuildHooks` 自动执行同一构建。
+该命令会在 `solver/` 子项目中使用 `uv` 环境执行 PyInstaller，把 `solver/solver.py` 构建到 `solver/dist/` 下的平台二进制（Windows `solver.exe`，macOS `solver`），并由 Go/Wails 直接以该目录作为 sidecar 单一来源。`wails build -nsis` 与 `wails build -platform darwin/arm64` 都会通过 `wails.json` 的 `preBuildHooks` 自动执行同一构建。
 
 ## 开发说明
 
@@ -231,11 +234,12 @@ just build-go
 just lint
 just dev
 just package
+just package-macos
 ```
 
 ### CI
 
-`.github/workflows/build.yml` 将 lint 拆成 Ubuntu 并行任务，Windows 安装包构建独立并行启动；整体结果仍要求所有 job 成功。CI 直接调用底层命令，不依赖 `just`。
+`.github/workflows/build.yml` 将 lint 拆成 Ubuntu 并行任务，Windows 安装包与 macOS 应用包构建独立并行启动；整体结果仍要求所有 job 成功。CI 直接调用底层命令，不依赖 `just`。
 
 主要命令：
 
@@ -247,6 +251,7 @@ uv --directory solver sync --frozen --all-groups
 uv --directory solver run ruff check .
 uv --directory solver run ruff format --check .
 wails build -nsis
+wails build -platform darwin/arm64
 ```
 
 ### 数据模型修改时需要同步更新

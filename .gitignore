@@ -44,5 +44,6 @@ wheels/
 build/bin/
 build/windows/installer/*
 !build/windows/installer/project.nsi
+build/darwin/
 .ralph/
 prompt.md

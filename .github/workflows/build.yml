@@ -216,3 +216,65 @@ jobs:
           path: build/bin/*-installer.exe
           if-no-files-found: error
           retention-days: 14
+
+  build-macos:
+    name: Build macOS Apple Silicon app
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: solver/.python-version
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            solver/.python-version
+            solver/pyproject.toml
+            solver/uv.lock
+
+      - name: Install Wails CLI
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci --prefer-offline --no-audit --no-fund
+
+      - name: Sync solver dependencies
+        run: uv --directory solver sync --frozen
+
+      - name: Build Wails app
+        run: wails build -platform darwin/arm64
+
+      - name: Archive app bundle
+        run: ditto -c -k --sequesterRsrc --keepParent build/bin/course-scheduler.app build/bin/course-scheduler-darwin-arm64.zip
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: course-scheduler-darwin-arm64
+          path: build/bin/course-scheduler-darwin-arm64.zip
+          if-no-files-found: error
+          retention-days: 14

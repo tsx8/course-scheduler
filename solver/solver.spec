@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
+import glob
 import os
+import sys
+
 import ortools
 
 ortools_path = os.path.dirname(ortools.__file__)
@@ -19,14 +22,16 @@ def should_exclude_collected_binary(binary):
 
     return binary_name.startswith('api-ms-win-')
 
-pywrap_path = os.path.join(ortools_path, '_pywrapcp.pyd')
-if os.path.exists(pywrap_path):
-    ortools_binaries.append((pywrap_path, 'ortools'))
-    
+for pywrap_path in glob.glob(os.path.join(ortools_path, '**', '_pywrapcp.*'), recursive=True):
+    if not os.path.isfile(pywrap_path):
+        continue
+    relative_dir = os.path.relpath(os.path.dirname(pywrap_path), ortools_path)
+    destination = 'ortools' if relative_dir == '.' else os.path.join('ortools', relative_dir)
+    ortools_binaries.append((pywrap_path, destination))
+
 libs_path = os.path.join(ortools_path, '.libs')
 if os.path.exists(libs_path):
     ortools_binaries.append((libs_path, 'ortools/.libs'))
-    
 
 a = Analysis(
     ['solver.py'],
@@ -60,7 +65,7 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch='arm64' if sys.platform == 'darwin' else None,
     codesign_identity=None,
     entitlements_file=None,
 )

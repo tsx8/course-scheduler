@@ -7,7 +7,8 @@
   "frontend:dev:watcher": "npm run dev:wails",
   "frontend:dev:serverUrl": "auto",
   "preBuildHooks": {
-    "windows/*": "uv --directory ../../solver run pyinstaller solver.spec"
+    "windows/*": "uv --directory ../../solver run pyinstaller solver.spec",
+    "darwin/*": "uv --directory ../../solver run pyinstaller solver.spec"
   },
   "author": {
     "name": "tsx8",

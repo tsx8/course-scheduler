@@ -93,5 +93,9 @@ dev:
 package:
     wails build -nsis
 
+# Build the unsigned macOS Apple Silicon app bundle.
+package-macos:
+    wails build -platform darwin/arm64
+
 # Run the normal local verification suite.
 verify: lint build

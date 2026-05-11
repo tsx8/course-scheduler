@@ -21,11 +21,13 @@
 | 本地完整构建 | `just build` |
 | Wails GUI 开发运行 | `just dev` |
 | Windows 安装包 | `just package` |
+| macOS 应用包 | `just package-macos` |
 
 Notes:
 - `just dev` 是常驻 GUI 开发命令，用于真实交互烟测。
 - `just package` 调用 `wails build -nsis`，产出 `build/bin/*-installer.exe`。
-- `wails.json` 的 `preBuildHooks` 会在打包前从 `build/bin` 运行 `uv --directory ../../solver run pyinstaller solver.spec`。
+- `just package-macos` 调用 `wails build -platform darwin/arm64`，产出 `build/bin/course-scheduler.app`。
+- `wails.json` 的 `preBuildHooks` 会在打包前从 `build/bin` 运行 `uv --directory ../../solver run pyinstaller solver.spec`，Windows 生成 `solver.exe`，macOS 生成 `solver`。
 - CI 仍直接执行底层命令，不依赖 `just`。
 - 本仓库没有自动化测试框架；不要主动引入测试框架或 CI 流水线，除非用户要求。
 
@@ -38,10 +40,10 @@ Notes:
 - 用户指令永远高于本文件。
 
 ## Project Overview
-- Windows 桌面应用：`Vue 3 + Wails 2 + Go + SQLite + Python OR-Tools`。
+- Windows / macOS 桌面应用：`Vue 3 + Wails 2 + Go + SQLite + Python OR-Tools`。
 - 桌面宿主入口：`main.go`；本地后端：`internal/backend/`。
 - 前端子项目：`frontend/`；前端只能通过 `frontend/src/host/desktop.js` 调用 Wails 后端。
-- 求解器是 Python sidecar：`solver/solver.py` 经 PyInstaller 输出到 `solver/dist/solver.exe`。
+- 求解器是 Python sidecar：`solver/solver.py` 经 PyInstaller 输出到 `solver/dist/solver.exe`（Windows）或 `solver/dist/solver`（macOS）。
 - SQLite 使用主表 / `_temp` 表机制承载编辑态、保存、提交和回滚。
 
 ## Important Paths
@@ -57,7 +59,7 @@ Notes:
 | Persistence | `internal/backend/storage.go`, `internal/backend/import_export.go` | SQLite 初始化、主表 / `_temp` 表、导入导出、兼容迁移。 |
 | Solver bridge | `internal/backend/solver.go`, `internal/backend/solver_process_*.go`, `solver/solver.py`, `solver/solver.spec` | sidecar 构建、调用、结果回写。 |
 | Tooling/CI | `justfile`, `.github/workflows/build.yml`, `.golangci.yml`, `.prettierrc.json`, `frontend/.oxlintrc.json`, `solver/pyproject.toml` | 命令入口、lint/format、CI 版本要同步。 |
-| Packaging | `wails.json`, `build/windows/installer/project.nsi` | Wails 构建、用户级 NSIS 安装包。 |
+| Packaging | `wails.json`, `build/windows/installer/project.nsi` | Wails 构建、用户级 NSIS 安装包、macOS 应用包。 |
 
 ## Architecture and Data Contracts
 - SQLite 主表 / `_temp` 表承载编辑态、保存、提交和回滚；数据层改动后要验证加载、保存、提交、回滚、导入导出仍一致。
@@ -78,7 +80,7 @@ Notes:
 | Solver/model contract | `just lint-solver` + `just check-solver-format` + `just build-solver`，必要时再跑 `just build-go` |
 | Go/Wails/backend | `just lint-go` + `just build-go` |
 | Cross-layer data flow | `just lint` + `just build` |
-| Packaging/CI/installer | `just package` |
+| Packaging/CI/installer | Windows 跑 `just package`；macOS 跑 `just package-macos` |
 | Real interaction flow | `just dev` 并在 GUI 中走通相关流程 |
 
 ## Tooling and Generated Files
@@ -87,7 +89,7 @@ Notes:
 - Go lint 使用 `go.mod` 的 `tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint`，入口是 `go tool golangci-lint run` / `just lint-go`。
 - Python solver 使用 `uv` 管理依赖，Ruff 配置在 `solver/pyproject.toml`。
 - 提交信息沿用 Conventional Commits，例如 `fix: ...`、`refactor: ...`、`docs: ...`。
-- 不要提交生成目录：`frontend/dist/`、`frontend/wailsjs/`、`frontend/node_modules/`、`node_modules/`、`solver/.venv/`、`solver/build/`、`solver/dist/`、`build/bin/`。
+- 不要提交生成目录：`frontend/dist/`、`frontend/wailsjs/`、`frontend/node_modules/`、`node_modules/`、`solver/.venv/`、`solver/build/`、`solver/dist/`、`build/bin/`、`build/darwin/`。
 - `build/windows/installer/project.nsi` 是跟踪文件；`build/windows/installer/` 里的其他文件是 Wails/NSIS 生成物。
 - `frontend/package.json.md5` 是 Wails 本地缓存标记，已忽略，不要重新纳入 Git。
 
@@ -118,4 +120,4 @@ Notes:
 - `frontend/src/host/desktop.js` 是否仍与页面调用面一致。
 - `internal/backend/models.go`、`storage.go`、`import_export.go` 是否仍与 `AllData` 契约一致。
 - `solver/solver.py` 是否仍按 `teacher_campuses` 集合约束建模。
-- `.github/workflows/build.yml`、`wails.json`、`build/windows/installer/project.nsi` 是否仍能产出用户级安装包。
+- `.github/workflows/build.yml`、`wails.json`、`build/windows/installer/project.nsi` 是否仍能产出用户级 Windows 安装包和 macOS 应用包。
