@@ -40,6 +40,7 @@ export const useDataStore = defineStore('data', () => {
     const scheduledClasses = ref([]);
     const teacherUnavailability = ref([]);
     const scheduleDensity = ref([]);
+    const campusFilterViews = ref([]);
     const focusedScheduleTarget = ref(null);
     let focusClearTimer = null;
 
@@ -48,6 +49,7 @@ export const useDataStore = defineStore('data', () => {
         selectedTeacherIdForTeacherView.value = null;
         selectedVenueIdsForCampusView.value = [];
         selectedTeacherIdsForCampusView.value = [];
+        selectedCourseIdsForCampusView.value = [];
         clearScheduleFocus();
 
         hasUnsavedChanges.value = false;
@@ -73,6 +75,26 @@ export const useDataStore = defineStore('data', () => {
     const integerOrDefault = (value, defaultValue) => {
         const number = Number(value);
         return Number.isFinite(number) ? Math.trunc(number) : defaultValue;
+    };
+
+    const idListOrEmpty = (value) => {
+        return Array.isArray(value) ? [...new Set(value.filter(Boolean))] : [];
+    };
+
+    const normalizeCampusFilterView = (view, defaults = {}) => ({
+        id: view?.id || defaults.id || uuidv4(),
+        name: String(view?.name || defaults.name || '未命名视图'),
+        campus_id: view?.campus_id || defaults.campus_id || '',
+        venue_ids: idListOrEmpty(view?.venue_ids || defaults.venue_ids),
+        teacher_ids: idListOrEmpty(view?.teacher_ids || defaults.teacher_ids),
+        course_ids: idListOrEmpty(view?.course_ids || defaults.course_ids),
+        sort_order: integerOrDefault(view?.sort_order, defaults.sort_order ?? 0),
+    });
+
+    const nextCampusFilterViewOrder = () => {
+        return campusFilterViews.value.reduce((maxOrder, view) => {
+            return Math.max(maxOrder, integerOrDefault(view.sort_order, 0));
+        }, 0) + 1;
     };
 
     const nextStagedOrder = () => {
@@ -133,6 +155,7 @@ export const useDataStore = defineStore('data', () => {
     const selectedTeacherIdForTeacherView = ref(null);
     const selectedVenueIdsForCampusView = ref([]);
     const selectedTeacherIdsForCampusView = ref([]);
+    const selectedCourseIdsForCampusView = ref([]);
 
     const diagnosticsData = computed(() => ({
         teachers: teachers.value,
@@ -255,6 +278,7 @@ export const useDataStore = defineStore('data', () => {
                 scheduled_classes: toRaw(data.scheduledClasses),
                 teacher_unavailability: toRaw(data.teacherUnavailability),
                 schedule_density: toRaw(data.scheduleDensity),
+                campus_filter_views: toRaw(data.campusFilterViews),
             };
             await invoke('save_temp_data', { content: rawData });
             console.log('Temp data saved successfully.');
@@ -276,7 +300,8 @@ export const useDataStore = defineStore('data', () => {
         teacherCampuses: teacherCampuses.value,
         scheduledClasses: scheduledClasses.value,
         teacherUnavailability: teacherUnavailability.value,
-        scheduleDensity: scheduleDensity.value
+        scheduleDensity: scheduleDensity.value,
+        campusFilterViews: campusFilterViews.value
     });
 
     const debouncedSave = debounce((data) => {
@@ -320,7 +345,8 @@ export const useDataStore = defineStore('data', () => {
                     teacherCampuses: teacherCampuses.value,
                     scheduledClasses: scheduledClasses.value,
                     teacherUnavailability: teacherUnavailability.value,
-                    scheduleDensity: scheduleDensity.value
+                    scheduleDensity: scheduleDensity.value,
+                    campusFilterViews: campusFilterViews.value
                 }),
                 (newState) => {
                     if (!isInitialized.value || isReverting.value) return;
@@ -352,6 +378,7 @@ export const useDataStore = defineStore('data', () => {
         }));
         teacherUnavailability.value = newData.teacher_unavailability || [];
         scheduleDensity.value = newData.schedule_density || [];
+        campusFilterViews.value = (newData.campus_filter_views || []).map(view => normalizeCampusFilterView(view));
         syncUnsavedStatus();
     };
 
@@ -485,6 +512,10 @@ export const useDataStore = defineStore('data', () => {
         teacherCampuses.value = teacherCampuses.value.filter(tc => tc.teacher_id !== teacherId);
         teacherUnavailability.value = teacherUnavailability.value.filter(tu => tu.teacher_id !== teacherId);
         scheduledClasses.value = scheduledClasses.value.filter(sc => sc.teacher_id !== teacherId);
+        campusFilterViews.value = campusFilterViews.value.map(view => ({
+            ...view,
+            teacher_ids: view.teacher_ids.filter(id => id !== teacherId),
+        }));
 
         if (selectedTeacherIdForTeacherView.value === teacherId) {
             selectedTeacherIdForTeacherView.value = null;
@@ -563,6 +594,10 @@ export const useDataStore = defineStore('data', () => {
         courseVenues.value = courseVenues.value.filter(cv => cv.course_id !== courseId);
         teacherCourses.value = teacherCourses.value.filter(tc => tc.course_id !== courseId);
         scheduledClasses.value = scheduledClasses.value.filter(sc => sc.course_id !== courseId);
+        campusFilterViews.value = campusFilterViews.value.map(view => ({
+            ...view,
+            course_ids: view.course_ids.filter(id => id !== courseId),
+        }));
     };
 
     const addCampus = (campusData) => {
@@ -608,6 +643,7 @@ export const useDataStore = defineStore('data', () => {
         teacherCampuses.value = teacherCampuses.value.filter(tc => tc.campus_id !== campusId);
         scheduledClasses.value = scheduledClasses.value.filter(sc => sc.campus_id !== campusId);
         scheduleDensity.value = scheduleDensity.value.filter(sd => sd.campus_id !== campusId);
+        campusFilterViews.value = campusFilterViews.value.filter(view => view.campus_id !== campusId);
 
         if (selectedCampusIdForCampusView.value === campusId) {
             selectedCampusIdForCampusView.value = null;
@@ -631,6 +667,10 @@ export const useDataStore = defineStore('data', () => {
         venues.value = venues.value.filter(v => !(v.id === venueId && v.campus_id === campusId));
         courseVenues.value = courseVenues.value.filter(cv => cv.venue_id !== venueId);
         scheduledClasses.value = scheduledClasses.value.filter(sc => !(sc.campus_id === campusId && sc.venue_id === venueId));
+        campusFilterViews.value = campusFilterViews.value.map(view => ({
+            ...view,
+            venue_ids: view.venue_ids.filter(id => id !== venueId),
+        }));
     };
 
     const updateCampusScheduleDensity = (campusId, dayId, timeId, count) => {
@@ -707,6 +747,10 @@ export const useDataStore = defineStore('data', () => {
             ? selectedTeacherIdsForCampusView.value
             : [];
         const selectedTeacherIds = new Set(teacherIds);
+        const courseIds = Array.isArray(selectedCourseIdsForCampusView.value)
+            ? selectedCourseIdsForCampusView.value
+            : [];
+        const selectedCourseIds = new Set(courseIds);
 
         if (!campusId) return new Map();
 
@@ -715,7 +759,8 @@ export const useDataStore = defineStore('data', () => {
             const campusMatch = schedule.campus_id === campusId;
             const venueMatch = selectedVenueIds.size === 0 || selectedVenueIds.has(schedule.venue_id);
             const teacherMatch = selectedTeacherIds.size === 0 || selectedTeacherIds.has(schedule.teacher_id);
-            return campusMatch && venueMatch && teacherMatch;
+            const courseMatch = selectedCourseIds.size === 0 || selectedCourseIds.has(schedule.course_id);
+            return campusMatch && venueMatch && teacherMatch && courseMatch;
         });
 
         filteredSchedules.forEach(schedule => {
@@ -910,6 +955,21 @@ export const useDataStore = defineStore('data', () => {
         scheduledClasses.value = scheduledClasses.value.filter(s => s.id !== scheduleId);
     };
 
+    const addCampusFilterView = (filterView) => {
+        const newView = normalizeCampusFilterView(filterView, {
+            id: uuidv4(),
+            sort_order: nextCampusFilterViewOrder(),
+        });
+        campusFilterViews.value.push(newView);
+        return newView;
+    };
+
+    const deleteCampusFilterView = (viewId) => {
+        const initialLength = campusFilterViews.value.length;
+        campusFilterViews.value = campusFilterViews.value.filter(view => view.id !== viewId);
+        return campusFilterViews.value.length !== initialLength;
+    };
+
     const toggleUnavailableSlot = (teacherId, dayId, timeId) => {
         const index = teacherUnavailability.value.findIndex(
             tu => tu.teacher_id === teacherId && tu.day_id === dayId && tu.time_id === timeId
@@ -973,6 +1033,7 @@ export const useDataStore = defineStore('data', () => {
         stagedScheduledClasses,
         teacherUnavailability,
         scheduleDensity,
+        campusFilterViews,
         scheduleIssues,
         issueCounts,
         issuesByScheduleId,
@@ -998,6 +1059,9 @@ export const useDataStore = defineStore('data', () => {
         selectedTeacherIdForTeacherView,
         selectedVenueIdsForCampusView,
         selectedTeacherIdsForCampusView,
+        selectedCourseIdsForCampusView,
+        addCampusFilterView,
+        deleteCampusFilterView,
 
         courseOptions,
         campusOptions,

@@ -15,6 +15,7 @@ type AllData struct {
 	ScheduledClasses      []ScheduledClass        `json:"scheduled_classes"`
 	TeacherUnavailability []TeacherUnavailability `json:"teacher_unavailability"`
 	ScheduleDensity       []ScheduleDensity       `json:"schedule_density"`
+	CampusFilterViews     []CampusFilterView      `json:"campus_filter_views"`
 }
 
 type TimeSlot struct {
@@ -38,6 +39,16 @@ type ScheduleDensity struct {
 	DayID    string `json:"day_id"`
 	TimeID   string `json:"time_id"`
 	Count    int    `json:"count"`
+}
+
+type CampusFilterView struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	CampusID   string   `json:"campus_id"`
+	VenueIDs   []string `json:"venue_ids"`
+	TeacherIDs []string `json:"teacher_ids"`
+	CourseIDs  []string `json:"course_ids"`
+	SortOrder  int      `json:"sort_order"`
 }
 
 type Venue struct {

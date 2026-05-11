@@ -93,6 +93,10 @@ func hasUnsavedChanges(conn queryExecutor) (bool, error) {
 	tempTables := []string{
 		"scheduled_classes_temp",
 		"teacher_unavailability_temp",
+		"campus_filter_view_courses_temp",
+		"campus_filter_view_teachers_temp",
+		"campus_filter_view_venues_temp",
+		"campus_filter_views_temp",
 		"teacher_campuses_temp",
 		"teacher_courses_temp",
 		"teachers_temp",
@@ -176,6 +180,10 @@ func loadAllDataFromConnection(conn queryExecutor, useTemp bool) (AllData, error
 	if err != nil {
 		return AllData{}, err
 	}
+	campusFilterViews, err := loadCampusFilterViews(conn, useTemp)
+	if err != nil {
+		return AllData{}, err
+	}
 
 	return AllData{
 		Time:                  timeSlots,
@@ -190,6 +198,7 @@ func loadAllDataFromConnection(conn queryExecutor, useTemp bool) (AllData, error
 		ScheduledClasses:      scheduledClasses,
 		TeacherUnavailability: teacherUnavailability,
 		ScheduleDensity:       scheduleDensity,
+		CampusFilterViews:     campusFilterViews,
 	}, nil
 }
 
@@ -661,6 +670,63 @@ func loadScheduleDensity(conn queryExecutor, useTemp bool) ([]ScheduleDensity, e
 	return density, rows.Err()
 }
 
+func loadCampusFilterViews(conn queryExecutor, useTemp bool) ([]CampusFilterView, error) {
+	table := tableName("campus_filter_views", useTemp)
+	rows, err := conn.Query(fmt.Sprintf("SELECT id, name, campus_id, sort_order FROM %s ORDER BY sort_order, name, id", table))
+	if err != nil {
+		return nil, fmt.Errorf("query %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	views := []CampusFilterView{}
+	for rows.Next() {
+		var view CampusFilterView
+		if err := rows.Scan(&view.ID, &view.Name, &view.CampusID, &view.SortOrder); err != nil {
+			return nil, fmt.Errorf("scan %s: %w", table, err)
+		}
+		views = append(views, view)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for index := range views {
+		views[index].VenueIDs, err = loadCampusFilterViewRelationIDs(conn, useTemp, "campus_filter_view_venues", "venue_id", views[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		views[index].TeacherIDs, err = loadCampusFilterViewRelationIDs(conn, useTemp, "campus_filter_view_teachers", "teacher_id", views[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		views[index].CourseIDs, err = loadCampusFilterViewRelationIDs(conn, useTemp, "campus_filter_view_courses", "course_id", views[index].ID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return views, nil
+}
+
+func loadCampusFilterViewRelationIDs(conn queryExecutor, useTemp bool, baseTable string, column string, viewID string) ([]string, error) {
+	table := tableName(baseTable, useTemp)
+	rows, err := conn.Query(fmt.Sprintf("SELECT %s FROM %s WHERE view_id = ? ORDER BY %s", column, table, column), viewID)
+	if err != nil {
+		return nil, fmt.Errorf("query %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan %s: %w", table, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func writeAllDataToTables(tx *sql.Tx, data AllData, useTemp bool) error {
 	if err := clearTables(tx, useTemp); err != nil {
 		return err
@@ -760,6 +826,28 @@ func writeAllDataToTables(tx *sql.Tx, data AllData, useTemp bool) error {
 		}
 	}
 
+	for _, view := range data.CampusFilterViews {
+		if _, err := tx.Exec(
+			fmt.Sprintf("INSERT INTO %s (id, name, campus_id, sort_order) VALUES (?, ?, ?, ?)", tableName("campus_filter_views", useTemp)),
+			view.ID,
+			view.Name,
+			view.CampusID,
+			view.SortOrder,
+		); err != nil {
+			return fmt.Errorf("insert campus filter view: %w", err)
+		}
+
+		if err := insertCampusFilterViewRelationIDs(tx, useTemp, "campus_filter_view_venues", "venue_id", view.ID, view.VenueIDs); err != nil {
+			return err
+		}
+		if err := insertCampusFilterViewRelationIDs(tx, useTemp, "campus_filter_view_teachers", "teacher_id", view.ID, view.TeacherIDs); err != nil {
+			return err
+		}
+		if err := insertCampusFilterViewRelationIDs(tx, useTemp, "campus_filter_view_courses", "course_id", view.ID, view.CourseIDs); err != nil {
+			return err
+		}
+	}
+
 	for _, item := range data.TeacherUnavailability {
 		if _, err := tx.Exec(
 			fmt.Sprintf("INSERT INTO %s (teacher_id, day_id, time_id) VALUES (?, ?, ?)", tableName("teacher_unavailability", useTemp)),
@@ -804,10 +892,35 @@ func writeAllDataToTables(tx *sql.Tx, data AllData, useTemp bool) error {
 	return nil
 }
 
+func insertCampusFilterViewRelationIDs(tx *sql.Tx, useTemp bool, baseTable string, column string, viewID string, ids []string) error {
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		if _, err := tx.Exec(
+			fmt.Sprintf("INSERT INTO %s (view_id, %s) VALUES (?, ?)", tableName(baseTable, useTemp), column),
+			viewID,
+			id,
+		); err != nil {
+			return fmt.Errorf("insert campus filter view relation: %w", err)
+		}
+	}
+	return nil
+}
+
 func clearTables(tx *sql.Tx, useTemp bool) error {
 	tables := []string{
 		tableName("scheduled_classes", useTemp),
 		tableName("teacher_unavailability", useTemp),
+		tableName("campus_filter_view_courses", useTemp),
+		tableName("campus_filter_view_teachers", useTemp),
+		tableName("campus_filter_view_venues", useTemp),
+		tableName("campus_filter_views", useTemp),
 		tableName("teacher_campuses", useTemp),
 		tableName("teacher_courses", useTemp),
 		tableName("teachers", useTemp),
@@ -832,6 +945,10 @@ func truncateAllTempTables(tx *sql.Tx) error {
 	tables := []string{
 		"scheduled_classes_temp",
 		"teacher_unavailability_temp",
+		"campus_filter_view_courses_temp",
+		"campus_filter_view_teachers_temp",
+		"campus_filter_view_venues_temp",
+		"campus_filter_views_temp",
 		"teacher_campuses_temp",
 		"teacher_courses_temp",
 		"teachers_temp",
@@ -856,6 +973,10 @@ func clearAllTempTables(conn queryExecutor) error {
 	tables := []string{
 		"scheduled_classes_temp",
 		"teacher_unavailability_temp",
+		"campus_filter_view_courses_temp",
+		"campus_filter_view_teachers_temp",
+		"campus_filter_view_venues_temp",
+		"campus_filter_views_temp",
 		"teacher_campuses_temp",
 		"teacher_courses_temp",
 		"teachers_temp",
@@ -990,6 +1111,38 @@ CREATE TABLE IF NOT EXISTS schedule_density (
     FOREIGN KEY (time_id) REFERENCES time_slots(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS campus_filter_views (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    campus_id TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (campus_id) REFERENCES campuses(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS campus_filter_view_venues (
+    view_id TEXT NOT NULL,
+    venue_id TEXT NOT NULL,
+    PRIMARY KEY (view_id, venue_id),
+    FOREIGN KEY (view_id) REFERENCES campus_filter_views(id) ON DELETE CASCADE,
+    FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS campus_filter_view_teachers (
+    view_id TEXT NOT NULL,
+    teacher_id TEXT NOT NULL,
+    PRIMARY KEY (view_id, teacher_id),
+    FOREIGN KEY (view_id) REFERENCES campus_filter_views(id) ON DELETE CASCADE,
+    FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS campus_filter_view_courses (
+    view_id TEXT NOT NULL,
+    course_id TEXT NOT NULL,
+    PRIMARY KEY (view_id, course_id),
+    FOREIGN KEY (view_id) REFERENCES campus_filter_views(id) ON DELETE CASCADE,
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS time_slots_temp (
     id TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -1089,6 +1242,38 @@ CREATE TABLE IF NOT EXISTS schedule_density_temp (
     FOREIGN KEY (time_id) REFERENCES time_slots_temp(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS campus_filter_views_temp (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    campus_id TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (campus_id) REFERENCES campuses_temp(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS campus_filter_view_venues_temp (
+    view_id TEXT NOT NULL,
+    venue_id TEXT NOT NULL,
+    PRIMARY KEY (view_id, venue_id),
+    FOREIGN KEY (view_id) REFERENCES campus_filter_views_temp(id) ON DELETE CASCADE,
+    FOREIGN KEY (venue_id) REFERENCES venues_temp(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS campus_filter_view_teachers_temp (
+    view_id TEXT NOT NULL,
+    teacher_id TEXT NOT NULL,
+    PRIMARY KEY (view_id, teacher_id),
+    FOREIGN KEY (view_id) REFERENCES campus_filter_views_temp(id) ON DELETE CASCADE,
+    FOREIGN KEY (teacher_id) REFERENCES teachers_temp(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS campus_filter_view_courses_temp (
+    view_id TEXT NOT NULL,
+    course_id TEXT NOT NULL,
+    PRIMARY KEY (view_id, course_id),
+    FOREIGN KEY (view_id) REFERENCES campus_filter_views_temp(id) ON DELETE CASCADE,
+    FOREIGN KEY (course_id) REFERENCES courses_temp(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_venues_campus_id ON venues(campus_id);
 CREATE INDEX IF NOT EXISTS idx_course_venues_course_id ON course_venues(course_id);
 CREATE INDEX IF NOT EXISTS idx_course_venues_venue_id ON course_venues(venue_id);
@@ -1101,6 +1286,10 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_classes_course_id ON scheduled_classes(
 CREATE INDEX IF NOT EXISTS idx_scheduled_classes_venue_id ON scheduled_classes(venue_id);
 CREATE INDEX IF NOT EXISTS idx_teacher_unavailability_teacher_id ON teacher_unavailability(teacher_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_density_campus_id ON schedule_density(campus_id);
+CREATE INDEX IF NOT EXISTS idx_campus_filter_views_campus_id ON campus_filter_views(campus_id);
+CREATE INDEX IF NOT EXISTS idx_campus_filter_view_venues_venue_id ON campus_filter_view_venues(venue_id);
+CREATE INDEX IF NOT EXISTS idx_campus_filter_view_teachers_teacher_id ON campus_filter_view_teachers(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_campus_filter_view_courses_course_id ON campus_filter_view_courses(course_id);
 
 CREATE INDEX IF NOT EXISTS idx_venues_temp_campus_id ON venues_temp(campus_id);
 CREATE INDEX IF NOT EXISTS idx_course_venues_temp_course_id ON course_venues_temp(course_id);
@@ -1113,4 +1302,8 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_classes_temp_teacher_id ON scheduled_cl
 CREATE INDEX IF NOT EXISTS idx_scheduled_classes_temp_course_id ON scheduled_classes_temp(course_id);
 CREATE INDEX IF NOT EXISTS idx_scheduled_classes_temp_venue_id ON scheduled_classes_temp(venue_id);
 CREATE INDEX IF NOT EXISTS idx_teacher_unavailability_temp_teacher_id ON teacher_unavailability_temp(teacher_id);
-CREATE INDEX IF NOT EXISTS idx_schedule_density_temp_campus_id ON schedule_density_temp(campus_id);`
+CREATE INDEX IF NOT EXISTS idx_schedule_density_temp_campus_id ON schedule_density_temp(campus_id);
+CREATE INDEX IF NOT EXISTS idx_campus_filter_views_temp_campus_id ON campus_filter_views_temp(campus_id);
+CREATE INDEX IF NOT EXISTS idx_campus_filter_view_venues_temp_venue_id ON campus_filter_view_venues_temp(venue_id);
+CREATE INDEX IF NOT EXISTS idx_campus_filter_view_teachers_temp_teacher_id ON campus_filter_view_teachers_temp(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_campus_filter_view_courses_temp_course_id ON campus_filter_view_courses_temp(course_id);`
