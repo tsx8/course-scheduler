@@ -1,9 +1,9 @@
 <script setup>
-import { computed, h, ref, watch } from 'vue';
+import { computed, h, nextTick, ref, watch } from 'vue';
 import { useDataStore } from '../stores/data';
 import { useScheduleDragStore } from '../stores/scheduleDrag';
-import { NSelect, NDataTable, NFlex, NH2, NEmpty, NInputNumber, NButton, NIcon, NModal, NTag, useMessage } from 'naive-ui';
-import { DownloadOutline as ExportIcon } from '@vicons/ionicons5';
+import { NSelect, NDataTable, NFlex, NH2, NEmpty, NInputNumber, NButton, NIcon, NModal, NTag, useDialog, useMessage } from 'naive-ui';
+import { AddOutline as AddIcon, DownloadOutline as ExportIcon, TrashOutline as DeleteIcon } from '@vicons/ionicons5';
 import ScheduleCard from '../components/ScheduleCard.vue';
 import ScheduleDropCell from '../components/ScheduleDropCell.vue';
 import ScheduleDetailDrawer from '../components/ScheduleDetailDrawer.vue';
@@ -11,20 +11,40 @@ import ScheduleDetailDrawer from '../components/ScheduleDetailDrawer.vue';
 const dataStore = useDataStore();
 const scheduleDrag = useScheduleDragStore();
 const message = useMessage();
+const dialog = useDialog();
+const selectedCampusFilterViewId = ref(null);
+const isApplyingCampusFilterView = ref(false);
 
 const selectedCampusId = computed({
     get: () => dataStore.selectedCampusIdForCampusView,
-    set: (val) => { dataStore.selectedCampusIdForCampusView = val; }
+    set: (val) => {
+        dataStore.selectedCampusIdForCampusView = val;
+        if (!isApplyingCampusFilterView.value) selectedCampusFilterViewId.value = null;
+    }
 });
 
 const selectedVenueIds = computed({
     get: () => dataStore.selectedVenueIdsForCampusView,
-    set: (val) => { dataStore.selectedVenueIdsForCampusView = Array.isArray(val) ? val : []; }
+    set: (val) => {
+        dataStore.selectedVenueIdsForCampusView = Array.isArray(val) ? val : [];
+        if (!isApplyingCampusFilterView.value) selectedCampusFilterViewId.value = null;
+    }
 });
 
 const selectedTeacherIds = computed({
     get: () => dataStore.selectedTeacherIdsForCampusView,
-    set: (val) => { dataStore.selectedTeacherIdsForCampusView = Array.isArray(val) ? val : []; }
+    set: (val) => {
+        dataStore.selectedTeacherIdsForCampusView = Array.isArray(val) ? val : [];
+        if (!isApplyingCampusFilterView.value) selectedCampusFilterViewId.value = null;
+    }
+});
+
+const selectedCourseIds = computed({
+    get: () => dataStore.selectedCourseIdsForCampusView,
+    set: (val) => {
+        dataStore.selectedCourseIdsForCampusView = Array.isArray(val) ? val : [];
+        if (!isApplyingCampusFilterView.value) selectedCampusFilterViewId.value = null;
+    }
 });
 
 const campusOptions = computed(() => dataStore.campusOptions);
@@ -59,11 +79,104 @@ const teacherOptions = computed(() => {
         .filter(teacher => teacherIds.has(teacher.id))
         .map(teacher => ({ label: teacher.name, value: teacher.id }));
 });
+const courseOptions = computed(() => {
+    if (!selectedCampusId.value) return [];
+    const courseIds = new Set(
+        dataStore.activeScheduledClasses
+            .filter(schedule => schedule.campus_id === selectedCampusId.value)
+            .map(schedule => schedule.course_id)
+    );
+
+    return dataStore.courses
+        .filter(course => courseIds.has(course.id))
+        .map(course => ({ label: course.name, value: course.id }));
+});
+
+const campusFilterViewOptions = computed(() => dataStore.campusFilterViews.map(view => ({
+    label: view.name,
+    value: view.id,
+})));
+
+const nameById = (records, id, field = 'name') => records.find(record => record.id === id)?.[field] || null;
+const namesFromIds = (records, ids, field = 'name') => ids
+    .map(id => nameById(records, id, field))
+    .filter(Boolean);
+
+const currentFilterViewName = () => {
+    const campusName = nameById(dataStore.campuses, selectedCampusId.value) || '未选校区';
+    const venueNames = namesFromIds(dataStore.venues, selectedVenueIds.value);
+    const teacherNames = namesFromIds(dataStore.teachers, selectedTeacherIds.value);
+    const courseNames = namesFromIds(dataStore.courses, selectedCourseIds.value);
+    const parts = [
+        venueNames.length ? `${venueNames.length === 1 ? venueNames[0] : `${venueNames.length}个场地`}` : '',
+        teacherNames.length ? `${teacherNames.length === 1 ? teacherNames[0] : `${teacherNames.length}位教师`}` : '',
+        courseNames.length ? `${courseNames.length === 1 ? courseNames[0] : `${courseNames.length}门课程`}` : '',
+    ].filter(Boolean);
+    return `${campusName} · ${parts.length ? parts.join(' / ') : '总课表'}`;
+};
+
+const uniqueFilterViewName = (baseName) => {
+    const existingNames = new Set(dataStore.campusFilterViews.map(view => view.name));
+    if (!existingNames.has(baseName)) return baseName;
+    let index = 2;
+    while (existingNames.has(`${baseName} (${index})`)) index += 1;
+    return `${baseName} (${index})`;
+};
+
+const handleCampusFilterViewChange = (viewId) => {
+    selectedCampusFilterViewId.value = viewId || null;
+    if (!viewId) return;
+    const view = dataStore.campusFilterViews.find(item => item.id === viewId);
+    if (!view) {
+        selectedCampusFilterViewId.value = null;
+        return;
+    }
+
+    isApplyingCampusFilterView.value = true;
+    selectedCampusId.value = view.campus_id;
+    selectedVenueIds.value = [...view.venue_ids];
+    selectedTeacherIds.value = [...view.teacher_ids];
+    selectedCourseIds.value = [...view.course_ids];
+    void nextTick(() => {
+        isApplyingCampusFilterView.value = false;
+    });
+};
+
+const saveCurrentCampusFilterView = () => {
+    if (!selectedCampusId.value) {
+        message.warning('请先选择校区后再保存筛选视图');
+        return;
+    }
+    const view = dataStore.addCampusFilterView({
+        name: uniqueFilterViewName(currentFilterViewName()),
+        campus_id: selectedCampusId.value,
+        venue_ids: selectedVenueIds.value,
+        teacher_ids: selectedTeacherIds.value,
+        course_ids: selectedCourseIds.value,
+    });
+    selectedCampusFilterViewId.value = view.id;
+    message.success('筛选视图已保存');
+};
+
+const deleteSelectedCampusFilterView = () => {
+    if (!selectedCampusFilterViewId.value) return;
+    const deleted = dataStore.deleteCampusFilterView(selectedCampusFilterViewId.value);
+    selectedCampusFilterViewId.value = null;
+    if (deleted) message.success('筛选视图已删除');
+};
 
 
 watch(selectedCampusId, () => {
+    if (isApplyingCampusFilterView.value) return;
     selectedVenueIds.value = [];
     selectedTeacherIds.value = [];
+    selectedCourseIds.value = [];
+    selectedCampusFilterViewId.value = null;
+});
+const hasActiveScheduleFilter = computed(() => {
+    return selectedVenueIds.value.length > 0
+        || selectedTeacherIds.value.length > 0
+        || selectedCourseIds.value.length > 0;
 });
 
 const scheduleMap = computed(() => dataStore.getScheduledClassesByCampus);
@@ -197,9 +310,10 @@ const scheduleMatchesFocus = (schedule, focus) => {
     if (scheduleIds.has(schedule.id)) return true;
     if (focus.type && focus.type !== 'campus') return false;
 
-    const hasScheduleScope = Boolean(focus.teacher_id || focus.campus_id || focus.venue_id || focus.day_id || focus.time_id);
+    const hasScheduleScope = Boolean(focus.teacher_id || focus.course_id || focus.campus_id || focus.venue_id || focus.day_id || focus.time_id);
     return hasScheduleScope
         && fieldMatches(focus.teacher_id, schedule.teacher_id)
+        && fieldMatches(focus.course_id, schedule.course_id)
         && fieldMatches(focus.campus_id, schedule.campus_id)
         && fieldMatches(focus.venue_id, schedule.venue_id)
         && fieldMatches(focus.day_id, schedule.day_id)
@@ -211,6 +325,9 @@ const targetHasFocusedSchedule = (target, focus) => {
     return target.schedule_ids.some(scheduleId => scheduleIds.has(scheduleId));
 };
 const activeScheduleId = () => scheduleDrag.draggedScheduleId || null;
+const courseVenueKey = (courseId, venueId) => `${courseId || ''}-${venueId || ''}`;
+const courseVenueSet = computed(() => new Set(dataStore.courseVenues.map(rel => courseVenueKey(rel.course_id, rel.venue_id))));
+const canUseVenue = (courseId, venueId) => Boolean(courseId && venueId && courseVenueSet.value.has(courseVenueKey(courseId, venueId)));
 const isFocusedSchedule = (schedule) => scheduleMatchesFocus(schedule, dataStore.focusedScheduleTarget);
 const isFocusedCell = (target) => {
     const focus = dataStore.focusedScheduleTarget;
@@ -221,12 +338,11 @@ const isFocusedCell = (target) => {
     if (!fieldMatches(focus.time_id, target.time_id)) return false;
     if (focus.venue_id && target.venue_id && focus.venue_id !== target.venue_id) return false;
     if (targetHasFocusedSchedule(target, focus)) return true;
-    return Boolean(focus.day_id || focus.time_id || focus.venue_id);
+    return Boolean(focus.day_id || focus.time_id || focus.venue_id || focus.course_id);
 };
 const visualCellIssues = (target, schedulesInCell = []) => {
     const issues = cellIssues(target);
-    const hasActiveScheduleFilter = selectedVenueIds.value.length > 0 || selectedTeacherIds.value.length > 0;
-    if (!hasActiveScheduleFilter) return issues;
+    if (!hasActiveScheduleFilter.value) return issues;
 
     const visibleScheduleIds = new Set(schedulesInCell.map(({ schedule }) => schedule.id));
     return issues.filter(issue => {
@@ -240,13 +356,23 @@ const campusTableOnlyIssueCategories = new Set([
     'teacher_hours_warning',
 ]);
 const shouldHighlightCampusIssue = (issue) => !campusTableOnlyIssueCategories.has(issue.category);
-const isHoverTarget = (target) => {
-    const hoverTarget = scheduleDrag.hoverTarget;
+const hoverMatchesCampusCell = (hoverTarget, target) => {
     return hoverTarget?.type === 'campus'
         && hoverTarget.campus_id === target.campus_id
         && hoverTarget.day_id === target.day_id
         && hoverTarget.time_id === target.time_id
         && hoverTarget.venue_id === target.venue_id;
+};
+const isHoverTarget = (target) => {
+    const hoverTarget = scheduleDrag.hoverTarget;
+    return hoverMatchesCampusCell(hoverTarget, target)
+        && (hoverTarget.drop_mode ?? 'cell') === 'cell';
+};
+const isHoverSchedule = (scheduleId) => {
+    const hoverTarget = scheduleDrag.hoverTarget;
+    return hoverTarget?.type === 'campus'
+        && hoverTarget.drop_mode === 'schedule'
+        && hoverTarget.target_schedule_id === scheduleId;
 };
 const findById = (records, id) => records.find(record => record.id === id);
 const dayName = (dayId) => findById(dataStore.day, dayId)?.value || '未知日期';
@@ -338,6 +464,7 @@ const handleDetailLocate = (issue) => {
     selectedTeacherIds.value = focus.teacher_id ? [focus.teacher_id] : [];
     if (focus.venue_id) selectedVenueIds.value = [focus.venue_id];
     else if (focus.campus_id) selectedVenueIds.value = [];
+    selectedCourseIds.value = focus.course_id ? [focus.course_id] : [];
     if (shouldHighlightCampusIssue(issue)) {
         dataStore.setScheduleFocus(focus);
     } else {
@@ -363,29 +490,49 @@ const handlePointerDragStart = ({ schedule, event }) => {
     scheduleDrag.startDrag({ schedule, source });
 };
 
-const handleCellPointerEnter = ({ target }) => {
-    if (!activeScheduleId()) return;
-    scheduleDrag.setHoverTarget(target);
+const setCampusCellHoverTarget = (target) => {
+    scheduleDrag.setHoverTarget({ ...target, drop_mode: 'cell' });
 };
 
-const handleCellPointerLeave = () => {
-    if (!activeScheduleId()) return;
+const setCampusScheduleHoverTarget = (target, targetScheduleId) => {
+    scheduleDrag.setHoverTarget({
+        ...target,
+        drop_mode: 'schedule',
+        target_schedule_id: targetScheduleId,
+    });
+};
+
+const updateCampusHoverTarget = ({ target, event }) => {
+    const sourceScheduleId = activeScheduleId();
+    if (!sourceScheduleId) return;
+
+    const targetScheduleId = event.target.closest?.('[data-schedule-id]')?.dataset?.scheduleId;
+    if (targetScheduleId && targetScheduleId !== sourceScheduleId) {
+        setCampusScheduleHoverTarget(target, targetScheduleId);
+        return;
+    }
+
+    setCampusCellHoverTarget(target);
+};
+
+const handleCellPointerEnter = (payload) => {
+    updateCampusHoverTarget(payload);
+};
+
+const handleCellPointerMove = (payload) => {
+    updateCampusHoverTarget(payload);
+};
+
+const handleCellPointerLeave = ({ target }) => {
+    if (!activeScheduleId() || !hoverMatchesCampusCell(scheduleDrag.hoverTarget, target)) return;
     scheduleDrag.setHoverTarget(null);
 };
 
 const findVenueById = (venueId) => dataStore.venues.find(venue => venue.id === venueId) || null;
-const installVenueIdForTarget = (sourceSchedule, target) => target.venue_id ?? sourceSchedule?.venue_id ?? null;
 const canInstallWithExistingVenue = (sourceSchedule, target) => {
     if (!sourceSchedule || target.venue_id) return true;
     if (!sourceSchedule.venue_id) return false;
     return findVenueById(sourceSchedule.venue_id)?.campus_id === target.campus_id;
-};
-const conflictsWithCampusTargetSchedule = (sourceSchedule, targetSchedule, target) => {
-    if (!sourceSchedule || !targetSchedule || sourceSchedule.id === targetSchedule.id) return false;
-    const targetVenueId = installVenueIdForTarget(sourceSchedule, target);
-    const sameTeacherAtTime = sourceSchedule.teacher_id === targetSchedule.teacher_id;
-    const sameVenueAtTime = Boolean(targetVenueId) && targetVenueId === targetSchedule.venue_id;
-    return sameTeacherAtTime || sameVenueAtTime;
 };
 
 const installDraggedSchedule = (sourceScheduleId, target) => {
@@ -416,10 +563,54 @@ const handleBlankAreaDrop = ({ target }) => {
 const conflictTargetPlacement = (sourceSchedule, targetSchedule, target) => ({
     teacher_id: sourceSchedule?.teacher_id,
     campus_id: target?.campus_id ?? targetSchedule?.campus_id,
-    venue_id: targetSchedule?.venue_id ?? target?.venue_id ?? sourceSchedule?.venue_id,
+    venue_id: target?.venue_id,
     day_id: target?.day_id ?? targetSchedule?.day_id,
     time_id: target?.time_id ?? targetSchedule?.time_id,
 });
+
+const placementForSchedule = (schedule, placement = {}) => ({
+    campus_id: placement.campus_id ?? schedule?.campus_id,
+    venue_id: placement.venue_id ?? schedule?.venue_id,
+    day_id: placement.day_id ?? schedule?.day_id,
+    time_id: placement.time_id ?? schedule?.time_id,
+});
+
+const campusSwapFields = (targetPlacement = {}) => {
+    const fields = ['campus_id', 'day_id', 'time_id'];
+    if (targetPlacement.venue_id) fields.splice(1, 0, 'venue_id');
+    return fields;
+};
+
+const swappedPlacementForSchedule = (schedule, counterpartSchedule, placementFields) => ({
+    campus_id: placementFields.includes('campus_id') ? counterpartSchedule?.campus_id : schedule?.campus_id,
+    venue_id: placementFields.includes('venue_id') ? counterpartSchedule?.venue_id : schedule?.venue_id,
+    day_id: placementFields.includes('day_id') ? counterpartSchedule?.day_id : schedule?.day_id,
+    time_id: placementFields.includes('time_id') ? counterpartSchedule?.time_id : schedule?.time_id,
+});
+
+const swapChangesPlacement = (sourceSchedule, targetSchedule, placementFields) => {
+    return placementFields.some(field => sourceSchedule?.[field] !== targetSchedule?.[field]);
+};
+
+const canPlaceScheduleAt = (schedule, placement) => canUseVenue(schedule?.course_id, placement?.venue_id);
+
+const conflictChoiceAvailability = computed(() => {
+    const sourceSchedule = findScheduleById(conflictModal.value.sourceScheduleId);
+    const targetSchedule = findScheduleById(conflictModal.value.targetScheduleId);
+    const targetPlacement = conflictModal.value.targetPlacement || {};
+    const swapFields = campusSwapFields(targetPlacement);
+
+    return {
+        replace: canPlaceScheduleAt(sourceSchedule, placementForSchedule(sourceSchedule, targetPlacement)),
+        displace: canPlaceScheduleAt(sourceSchedule, placementForSchedule(sourceSchedule, targetPlacement)),
+        swap: swapChangesPlacement(sourceSchedule, targetSchedule, swapFields)
+            && canPlaceScheduleAt(sourceSchedule, swappedPlacementForSchedule(sourceSchedule, targetSchedule, swapFields))
+            && canPlaceScheduleAt(targetSchedule, swappedPlacementForSchedule(targetSchedule, sourceSchedule, swapFields)),
+    };
+});
+
+const canApplyConflictChoice = (choice) => Boolean(conflictChoiceAvailability.value[choice]);
+const hasAvailableConflictChoice = computed(() => Object.values(conflictChoiceAvailability.value).some(Boolean));
 
 const openConflictModal = (sourceScheduleId, targetScheduleId, targetPlacement = null) => {
     if (!sourceScheduleId || !targetScheduleId) return;
@@ -442,7 +633,7 @@ const handleCardDrop = ({ target, targetScheduleId }) => {
 
     const sourceSchedule = findScheduleById(sourceScheduleId);
     const targetSchedule = findScheduleById(targetScheduleId || target.schedule_ids?.[0]);
-    if (conflictsWithCampusTargetSchedule(sourceSchedule, targetSchedule, target)) {
+    if (targetScheduleId && targetSchedule) {
         openConflictModal(sourceScheduleId, targetSchedule.id, conflictTargetPlacement(sourceSchedule, targetSchedule, target));
         return;
     }
@@ -464,10 +655,15 @@ const applyConflictChoice = (choice) => {
     const { sourceScheduleId, targetScheduleId, targetPlacement } = conflictModal.value;
     let result = null;
 
+    if (!canApplyConflictChoice(choice)) {
+        message.warning('该操作当前不可执行，请选择其他处理方式');
+        return;
+    }
+
     if (choice === 'replace') {
         result = dataStore.replaceSchedule(sourceScheduleId, targetScheduleId, targetPlacement || {});
     } else if (choice === 'swap') {
-        result = dataStore.swapSchedules(sourceScheduleId, targetScheduleId, ['campus_id', 'venue_id', 'day_id', 'time_id']);
+        result = dataStore.swapSchedules(sourceScheduleId, targetScheduleId, campusSwapFields(targetPlacement || {}));
     } else if (choice === 'displace') {
         result = dataStore.displaceSchedule(sourceScheduleId, targetScheduleId, targetPlacement || {});
     }
@@ -489,7 +685,7 @@ const applyConflictChoice = (choice) => {
 
 const renderCounterNode = (target, actualCount) => {
     const expectedCount = dataStore.getExpectedCountForCampusCell(target.campus_id, target.day_id, target.time_id);
-    const isOverbooked = actualCount > expectedCount && expectedCount > 0;
+    const isOverbooked = actualCount > expectedCount;
 
     return h('div', {
         class: 'campus-cell-counter',
@@ -529,15 +725,30 @@ const renderCounterNode = (target, actualCount) => {
     ]);
 };
 
+const handleDeleteSchedule = (schedule) => {
+    dialog.warning({
+        title: '确认删除排课',
+        content: '确定要删除这个排课记录吗？',
+        positiveText: '删除',
+        negativeText: '取消',
+        onPositiveClick: () => {
+            dataStore.deleteSchedule(schedule.id);
+            message.success('排课已删除');
+        },
+    });
+};
+
 const renderScheduleCard = (schedule) => h(ScheduleCard, {
     schedule,
     context: 'campus',
     issues: scheduleIssues(schedule.id),
     focused: isFocusedSchedule(schedule),
-    actions: { edit: false, delete: false },
+    dropTargeted: isHoverSchedule(schedule.id),
+    actions: { edit: false },
     onPointerDragStart: handlePointerDragStart,
     onLockToggle: (targetSchedule) => dataStore.setScheduleLocked(targetSchedule.id, !targetSchedule.is_locked),
     onStage: (targetSchedule) => dataStore.stageSchedule(targetSchedule.id),
+    onDelete: handleDeleteSchedule,
 });
 
 const renderCell = (dayId, timeId, schedulesInCell) => {
@@ -559,11 +770,12 @@ const renderCell = (dayId, timeId, schedulesInCell) => {
         showBlankArea: false,
         onPointerEnter: handleCellPointerEnter,
         onPointerLeave: handleCellPointerLeave,
+        onPointerMove: handleCellPointerMove,
         onBlankAreaDrop: handleBlankAreaDrop,
         onCardDrop: handleCardDrop,
         onIssueClick: () => openCellDetail(target, schedulesInCell),
     }, {
-        default: () => selectedVenueIds.value.length > 0
+        default: () => hasActiveScheduleFilter.value
             ? cards
             : [renderCounterNode(target, schedulesInCell.length), ...cards],
     });
@@ -655,8 +867,14 @@ const handleExportToCsv = () => {
     const teacherNamePart = teacherNames.length === 0
         ? ''
         : `_${teacherNames.length === 1 ? teacherNames[0] : `${teacherNames.length}位教师`}`;
-    const fileSuffix = venueNames.length > 0 || teacherNames.length > 0 ? '课表' : '总课表';
-    const fileName = `${campusName}${venueNamePart}${teacherNamePart}_${fileSuffix}.csv`;
+    const courseNames = selectedCourseIds.value
+        .map(courseId => dataStore.courses.find(course => course.id === courseId)?.name)
+        .filter(Boolean);
+    const courseNamePart = courseNames.length === 0
+        ? ''
+        : `_${courseNames.length === 1 ? courseNames[0] : `${courseNames.length}门课程`}`;
+    const fileSuffix = venueNames.length > 0 || teacherNames.length > 0 || courseNames.length > 0 ? '课表' : '总课表';
+    const fileName = `${campusName}${venueNamePart}${teacherNamePart}${courseNamePart}_${fileSuffix}.csv`;
 
     link.setAttribute('download', fileName);
     link.style.visibility = 'hidden';
@@ -681,12 +899,27 @@ watch(() => dataStore.campuses, (newCampuses) => {
             <n-flex justify="space-between" align="center" :wrap="false">
                 <n-h2 style="margin: 0; white-space: nowrap; flex-shrink: 0;">校区总课表</n-h2>
                 <n-flex :wrap="false" align="center" style="flex-shrink: 1; overflow: hidden;">
+                    <n-select :value="selectedCampusFilterViewId" placeholder="筛选视图" :options="campusFilterViewOptions" clearable
+                        style="width: 200px" @update:value="handleCampusFilterViewChange">
+                        <template #action>
+                            <div class="filter-view-actions">
+                                <n-button quaternary circle size="tiny" type="primary" aria-label="保存当前筛选" @mousedown.prevent @click.stop="saveCurrentCampusFilterView">
+                                    <template #icon><n-icon :component="AddIcon" /></template>
+                                </n-button>
+                                <n-button quaternary circle size="tiny" type="error" :disabled="!selectedCampusFilterViewId" aria-label="删除当前视图" @mousedown.prevent @click.stop="deleteSelectedCampusFilterView">
+                                    <template #icon><n-icon :component="DeleteIcon" /></template>
+                                </n-button>
+                            </div>
+                        </template>
+                    </n-select>
                     <n-select v-model:value="selectedCampusId" placeholder="请选择校区" :options="campusOptions" clearable
-                        style="width: 150px" />
+                        style="width: 80px" />
                     <n-select v-model:value="selectedVenueIds" multiple max-tag-count="responsive" placeholder="选择场地" :options="venueOptions" clearable
-                        :disabled="!selectedCampusId" style="width: 180px" />
+                        :disabled="!selectedCampusId" style="width: 100px" />
                     <n-select v-model:value="selectedTeacherIds" multiple max-tag-count="responsive" placeholder="选择教师" :options="teacherOptions" clearable
-                        :disabled="!selectedCampusId" style="width: 180px" />
+                        :disabled="!selectedCampusId" style="width: 100px" />
+                    <n-select v-model:value="selectedCourseIds" multiple max-tag-count="responsive" placeholder="选择课程" :options="courseOptions" clearable
+                        :disabled="!selectedCampusId" style="width: 100px" />
                     <n-button type="primary" @click="handleExportToCsv" :disabled="!selectedCampusId">
                         <template #icon><n-icon :component="ExportIcon" /></template>
                         导出CSV
@@ -715,12 +948,13 @@ watch(() => dataStore.campuses, (newCampuses) => {
 
         <n-modal v-model:show="conflictModal.show" preset="dialog" title="目标位置已有排课" @mask-click="closeConflictModal">
             <p>请选择如何处理目标位置已有排课。</p>
+            <p v-if="!hasAvailableConflictChoice" class="conflict-modal__warning">当前目标场地不适用于拖拽课程，不能执行换下、交换或覆盖。</p>
             <template #action>
                 <n-flex justify="end" :wrap="false">
                     <n-button @click="closeConflictModal">取消</n-button>
-                    <n-button type="warning" @click="applyConflictChoice('displace')">换下</n-button>
-                    <n-button type="info" @click="applyConflictChoice('swap')">交换</n-button>
-                    <n-button type="primary" @click="applyConflictChoice('replace')">覆盖</n-button>
+                    <n-button type="warning" :disabled="!canApplyConflictChoice('displace')" @click="applyConflictChoice('displace')">换下</n-button>
+                    <n-button type="info" :disabled="!canApplyConflictChoice('swap')" @click="applyConflictChoice('swap')">交换</n-button>
+                    <n-button type="primary" :disabled="!canApplyConflictChoice('replace')" @click="applyConflictChoice('replace')">覆盖</n-button>
                 </n-flex>
             </template>
         </n-modal>
@@ -748,6 +982,14 @@ watch(() => dataStore.campuses, (newCampuses) => {
     flex: 0 0 auto;
     padding: 12px 24px;
     border-bottom: 1px solid #efeff5;
+}
+
+.filter-view-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px 8px;
 }
 
 .timetable-page__content {
@@ -794,6 +1036,12 @@ watch(() => dataStore.campuses, (newCampuses) => {
 .campus-cell-counter__input :deep(.n-input-wrapper) {
     padding-left: 4px;
     padding-right: 4px;
+}
+
+.conflict-modal__warning {
+    margin: 8px 0 0;
+    color: #d03050;
+    font-size: 13px;
 }
 
 
