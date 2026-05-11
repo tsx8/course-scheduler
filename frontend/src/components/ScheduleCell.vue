@@ -2,10 +2,14 @@
     <ScheduleDropCell
         :target="cellTarget"
         :issues="cellIssues"
+        :hover="isCellDropTargeted"
         :focused="isCellFocused"
         :can-drop="!isBlocked"
         :occupied="hasSchedules"
         :show-issue-badge="false"
+        @pointer-enter="handleCellPointerMove"
+        @pointer-move="handleCellPointerMove"
+        @pointer-leave="handleCellPointerLeave"
         @blank-area-drop="handleBlankAreaDrop"
         @card-drop="handleCardDrop"
     >
@@ -17,6 +21,7 @@
                 context="teacher"
                 :issues="issuesForSchedule(schedule.id)"
                 :focused="isScheduleFocused(schedule.id)"
+                :drop-targeted="isScheduleDropTargeted(schedule.id)"
                 @pointer-drag-start="handlePointerDragStart"
                 @lock-toggle="handleLockToggle"
                 @stage="handleStage"
@@ -136,6 +141,7 @@ const isBlocked = computed(() => unavailableSet.value.has(cellKey.value) && !has
 const cellIssues = computed(() => dataStore.issuesByTeacherCell.get(teacherCellKey.value) || []);
 const focusedTarget = computed(() => dataStore.focusedScheduleTarget || null);
 const focusedScheduleId = computed(() => focusedTarget.value?.schedule_id || focusedTarget.value?.scheduleId || null);
+const hoverTarget = computed(() => scheduleDrag.hoverTarget || null);
 const isCellFocused = computed(() => {
     const target = focusedTarget.value;
     if (!target) return false;
@@ -173,6 +179,54 @@ const getDraggedScheduleId = () => {
         || state.schedule?.id
         || state.sourceSchedule?.id
         || null;
+};
+
+const hoverMatchesTeacherCell = (target) => {
+    return target?.type === 'teacher'
+        && target.teacher_id === props.teacherId
+        && target.day_id === props.dayId
+        && target.time_id === props.timeId;
+};
+
+const isCellDropTargeted = computed(() => {
+    return hoverMatchesTeacherCell(hoverTarget.value)
+        && (hoverTarget.value.drop_mode ?? 'cell') === 'cell';
+});
+
+const isScheduleDropTargeted = (scheduleId) => {
+    return hoverMatchesTeacherCell(hoverTarget.value)
+        && hoverTarget.value.drop_mode === 'schedule'
+        && hoverTarget.value.target_schedule_id === scheduleId;
+};
+
+const setCellHoverTarget = (target) => {
+    scheduleDrag.setHoverTarget({ ...target, drop_mode: 'cell' });
+};
+
+const setScheduleHoverTarget = (target, targetScheduleId) => {
+    scheduleDrag.setHoverTarget({
+        ...target,
+        drop_mode: 'schedule',
+        target_schedule_id: targetScheduleId,
+    });
+};
+
+const handleCellPointerMove = ({ target, event }) => {
+    const sourceScheduleId = getDraggedScheduleId();
+    if (!sourceScheduleId) return;
+
+    const targetScheduleId = event.target.closest?.('[data-schedule-id]')?.dataset?.scheduleId;
+    if (targetScheduleId && targetScheduleId !== sourceScheduleId) {
+        setScheduleHoverTarget(target, targetScheduleId);
+        return;
+    }
+
+    setCellHoverTarget(target);
+};
+
+const handleCellPointerLeave = () => {
+    if (!getDraggedScheduleId() || !hoverMatchesTeacherCell(hoverTarget.value)) return;
+    scheduleDrag.setHoverTarget(null);
 };
 
 const finishDrag = () => {

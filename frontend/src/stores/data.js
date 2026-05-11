@@ -816,6 +816,19 @@ export const useDataStore = defineStore('data', () => {
         return stagedSchedule;
     };
 
+    const restoreSchedule = (scheduleId) => {
+        const index = getScheduleIndex(scheduleId);
+        if (index === -1) return null;
+
+        const restoredSchedule = normalizeSchedule({
+            ...scheduledClasses.value[index],
+            is_staged: false,
+            staged_order: 0
+        });
+        scheduledClasses.value[index] = restoredSchedule;
+        return restoredSchedule;
+    };
+
     const installSchedule = (sourceScheduleId, target = {}) => {
         const index = getScheduleIndex(sourceScheduleId);
         if (index === -1) return null;
@@ -1025,6 +1038,7 @@ export const useDataStore = defineStore('data', () => {
         deleteSchedule,
         setScheduleLocked,
         stageSchedule,
+        restoreSchedule,
         installSchedule,
         swapSchedules,
         replaceSchedule,

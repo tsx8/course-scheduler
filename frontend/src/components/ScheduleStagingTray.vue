@@ -1,56 +1,57 @@
 <template>
-    <section
-        v-if="visible"
-        class="schedule-staging-tray"
-        :class="{ 'schedule-staging-tray--dragging': dragStore.isDragging }"
-        role="region"
-        aria-label="暂存区"
-        @pointerenter="handlePointerEnter"
-        @pointerleave="handlePointerLeave"
-        @pointerup="handleTrayDrop"
-    >
-        <div class="schedule-staging-tray__header">
-            <div>
-                <strong>暂存区</strong>
-                <span class="schedule-staging-tray__count">{{ stagedSchedules.length }} 项</span>
+    <Transition name="schedule-staging-tray-panel">
+        <section
+            v-if="visible"
+            class="schedule-staging-tray"
+            :class="{ 'schedule-staging-tray--dragging': dragStore.isDragging }"
+            role="region"
+            aria-label="暂存区"
+            @pointerenter="handlePointerEnter"
+            @pointerleave="handlePointerLeave"
+            @pointerup="handleTrayDrop"
+        >
+            <div class="schedule-staging-tray__header">
+                <div>
+                    <strong>暂存区</strong>
+                    <span class="schedule-staging-tray__count">{{ stagedSchedules.length }} 项</span>
+                </div>
+                <n-button
+                    v-if="stagedSchedules.length"
+                    size="tiny"
+                    quaternary
+                    type="error"
+                    aria-label="清空暂存区"
+                    @pointerdown.stop
+                    @click.stop="clearStagedSchedules"
+                >
+                    清空
+                </n-button>
             </div>
-            <n-button
-                v-if="stagedSchedules.length"
-                size="tiny"
-                quaternary
-                type="error"
-                aria-label="清空暂存区"
-                @pointerdown.stop
-                @click.stop="clearStagedSchedules"
-            >
-                清空
-            </n-button>
-        </div>
 
-        <div class="schedule-staging-tray__scroll" aria-label="暂存课程列表">
-            <ScheduleCard
-                v-for="schedule in stagedSchedules"
-                :key="schedule.id"
-                :schedule="schedule"
-                context="staging"
-                :issues="dataStore.issuesByScheduleId.get(schedule.id) || []"
-                :actions="{ edit: false, stage: false }"
-                @pointer-drag-start="handleCardDragStart"
-                @lock-toggle="handleLockToggle"
-                @delete="handleDelete"
-            />
-            <div
-                class="schedule-staging-tray__drop-slot"
-                :class="{ 'schedule-staging-tray__drop-slot--active': dragStore.isDragging }"
-                role="button"
-                tabindex="0"
-                aria-label="拖到这里暂存课程"
-                @pointerup.stop="handleDropSlotDrop"
-            >
-                拖到这里暂存
+            <div class="schedule-staging-tray__scroll" aria-label="暂存课程列表">
+                <ScheduleCard
+                    v-for="schedule in stagedSchedules"
+                    :key="schedule.id"
+                    :schedule="schedule"
+                    context="staging"
+                    :issues="dataStore.issuesByScheduleId.get(schedule.id) || []"
+                    :actions="{ edit: false, lock: false, stage: false, restore: true, delete: false }"
+                    @pointer-drag-start="handleCardDragStart"
+                    @restore="handleRestore"
+                />
+                <div
+                    class="schedule-staging-tray__drop-slot"
+                    :class="{ 'schedule-staging-tray__drop-slot--active': dragStore.isDragging }"
+                    role="button"
+                    tabindex="0"
+                    aria-label="拖到这里暂存课程"
+                    @pointerup.stop="handleDropSlotDrop"
+                >
+                    拖到这里暂存
+                </div>
             </div>
-        </div>
-    </section>
+        </section>
+    </Transition>
 </template>
 
 <script setup>
@@ -70,15 +71,14 @@ const dragStore = useScheduleDragStore();
 const stagedSchedules = computed(() => dataStore.stagedScheduledClasses);
 
 const handleCardDragStart = ({ schedule, event }) => {
+    event?.preventDefault?.();
     dragStore.startDrag({ schedule, source: { type: 'staging' }, event });
 };
 
-const handleLockToggle = (schedule) => {
-    dataStore.setScheduleLocked(schedule.id, !schedule.is_locked);
-};
 
-const handleDelete = (schedule) => {
-    dataStore.deleteSchedule(schedule.id);
+
+const handleRestore = (schedule) => {
+    dataStore.restoreSchedule(schedule.id);
 };
 
 const stageDraggedSchedule = () => {
@@ -186,6 +186,35 @@ const clearStagedSchedules = () => {
     font-size: 13px;
     cursor: default;
     transition: border-color 0.2s, color 0.2s, background-color 0.2s;
+}
+
+.schedule-staging-tray-panel-enter-active,
+.schedule-staging-tray-panel-leave-active {
+    transition:
+        flex-basis 0.2s ease,
+        height 0.2s ease,
+        margin-top 0.2s ease,
+        padding-top 0.2s ease,
+        padding-bottom 0.2s ease,
+        opacity 0.16s ease;
+}
+
+.schedule-staging-tray-panel-enter-from,
+.schedule-staging-tray-panel-leave-to {
+    flex-basis: 0;
+    height: 0;
+    margin-top: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .schedule-staging-tray-panel-enter-active,
+    .schedule-staging-tray-panel-leave-active {
+        transition: none;
+    }
 }
 
 .schedule-staging-tray__drop-slot--active {

@@ -4,6 +4,9 @@
         :class="cardClasses"
         tabindex="0"
         role="button"
+        draggable="false"
+        @dragstart.prevent
+        @selectstart.prevent
         @pointerdown="handlePointerDragStart"
         :data-schedule-id="schedule?.id"
         @pointerup="handlePointerDrop"
@@ -12,10 +15,10 @@
             <div class="schedule-card__title">
                 <strong>{{ courseName }}</strong>
                 <span v-if="contextSubtitle" class="schedule-card__subtitle">{{ contextSubtitle }}</span>
-                <span v-if="schedule?.is_staged" class="schedule-card__staged">暂存</span>
+                <span v-if="showStagedLabel" class="schedule-card__staged">暂存</span>
             </div>
             <div v-if="showBadges" class="schedule-card__badges">
-                <n-tag :type="schedule?.is_locked ? 'default' : 'success'" size="small" round>
+                <n-tag v-if="showLockBadge" :type="schedule?.is_locked ? 'default' : 'success'" size="small" round>
                     {{ schedule?.is_locked ? '已锁定' : '未锁定' }}
                 </n-tag>
                 <slot name="issue-tags" :issues="issues">
@@ -58,19 +61,23 @@
 
         <div v-if="hasVisibleActions" class="schedule-card__actions">
             <n-button v-if="actionConfig.edit" quaternary size="tiny" :aria-label="'编辑'" title="编辑" @pointerdown.stop @click.stop="emitAction('edit')">
-                <n-icon v-if="isCompactDensity" :component="EditIcon" />
+                <n-icon v-if="iconOnlyActions" :component="EditIcon" />
                 <template v-else>编辑</template>
             </n-button>
             <n-button v-if="actionConfig.lock" class="schedule-card__lock-action" :class="schedule?.is_locked ? 'schedule-card__lock-action--locked' : 'schedule-card__lock-action--unlocked'" quaternary size="tiny" @pointerdown.stop @click.stop="emitAction('lock-toggle')" :aria-label="schedule?.is_locked ? '取消锁定' : '锁定课程'" :title="lockActionText">
-                <n-icon v-if="isCompactDensity" :component="lockIcon" />
+                <n-icon v-if="iconOnlyActions" :component="lockIcon" />
                 <template v-else>{{ lockActionText }}</template>
             </n-button>
             <n-button v-if="actionConfig.stage" quaternary size="tiny" :aria-label="'暂存'" title="暂存" :disabled="schedule?.is_staged" @pointerdown.stop @click.stop="emitAction('stage')">
-                <n-icon v-if="isCompactDensity" :component="StageIcon" />
+                <n-icon v-if="iconOnlyActions" :component="StageIcon" />
                 <template v-else>暂存</template>
             </n-button>
+            <n-button v-if="actionConfig.restore" class="schedule-card__restore-action" quaternary size="tiny" type="primary" :aria-label="'还原课程'" title="还原课程" @pointerdown.stop @click.stop="emitAction('restore')">
+                <n-icon v-if="iconOnlyActions" :component="RestoreIcon" />
+                <template v-else>还原</template>
+            </n-button>
             <n-button v-if="actionConfig.delete" quaternary size="tiny" type="error" :aria-label="'删除'" title="删除" @pointerdown.stop @click.stop="emitAction('delete')">
-                <n-icon v-if="isCompactDensity" :component="DeleteIcon" />
+                <n-icon v-if="iconOnlyActions" :component="DeleteIcon" />
                 <template v-else>删除</template>
             </n-button>
         </div>
@@ -80,7 +87,7 @@
 <script setup>
 import { computed } from 'vue';
 import { NButton, NIcon, NTag } from 'naive-ui';
-import { ArchiveOutline as StageIcon, CreateOutline as EditIcon, LockClosedOutline, LockOpenOutline, TrashOutline as DeleteIcon } from '@vicons/ionicons5';
+import { ArchiveOutline as StageIcon, ArrowUndoOutline as RestoreIcon, CreateOutline as EditIcon, LockClosedOutline, LockOpenOutline, TrashOutline as DeleteIcon } from '@vicons/ionicons5';
 import { useDataStore } from '../stores/data';
 import ScheduleIssueTag from './ScheduleIssueTag.vue';
 
@@ -93,6 +100,7 @@ const props = defineProps({
     },
     issues: { type: Array, default: () => [] },
     focused: { type: Boolean, default: false },
+    dropTargeted: { type: Boolean, default: false },
     actions: { type: Object, default: () => ({}) },
     density: {
         type: String,
@@ -104,6 +112,7 @@ const props = defineProps({
 const emit = defineEmits([
     'lock-toggle',
     'stage',
+    'restore',
     'edit',
     'delete',
     'pointer-drag-start',
@@ -135,6 +144,8 @@ const effectiveDensity = computed(() => {
 });
 const isCompactDensity = computed(() => effectiveDensity.value === 'compact');
 const isStagingDensity = computed(() => effectiveDensity.value === 'staging');
+const iconOnlyActions = computed(() => isCompactDensity.value || isStagingDensity.value);
+const showStagedLabel = computed(() => props.schedule?.is_staged && props.context !== 'staging');
 const showDetailGrid = computed(() => effectiveDensity.value === 'normal');
 const severityRank = { error: 0, warning: 1 };
 const visibleIssues = computed(() => props.issues.filter(issue => issue));
@@ -154,18 +165,22 @@ const defaultActions = {
     edit: true,
     lock: true,
     stage: true,
+    restore: false,
     delete: true,
 };
 const actionConfig = computed(() => ({ ...defaultActions, ...(props.actions || {}) }));
 const cardClasses = computed(() => ({
     'schedule-card--focused': props.focused,
+    'schedule-card--drop-targeted': props.dropTargeted,
     'schedule-card--locked': props.schedule?.is_locked,
     'schedule-card--unlocked': props.schedule?.is_locked === false,
     'schedule-card--staged': props.schedule?.is_staged,
     [`schedule-card--${props.context}`]: true,
     [`schedule-card--density-${effectiveDensity.value}`]: true,
 }));
-const showBadges = computed(() => effectiveDensity.value !== 'compact');
+const showLockBadge = computed(() => !isCompactDensity.value && !isStagingDensity.value);
+const showIssueBadges = computed(() => !isCompactDensity.value && Boolean(primaryIssue.value));
+const showBadges = computed(() => showLockBadge.value || showIssueBadges.value);
 const hasVisibleActions = computed(() => Object.values(actionConfig.value).some(Boolean));
 
 const emitAction = (eventName) => {
@@ -183,8 +198,12 @@ const releasePointerCapture = (target, pointerId) => {
 };
 
 const handlePointerDragStart = (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+
+    event.preventDefault();
     const pointerTarget = event.currentTarget;
     const pointerId = event.pointerId;
+    pointerTarget?.focus?.({ preventScroll: true });
     releasePointerCapture(pointerTarget, pointerId);
     window.setTimeout(() => releasePointerCapture(pointerTarget, pointerId), 0);
     emit('pointer-drag-start', { schedule: props.schedule, event });
@@ -214,6 +233,10 @@ const handlePointerDrop = (event) => {
     background: #e6f7ff;
     text-align: left;
     cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+    -webkit-touch-callout: none;
     transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
     touch-action: none;
 }
@@ -264,6 +287,13 @@ const handlePointerDrop = (event) => {
     border-color: #ffd591;
 }
 
+.schedule-card--drop-targeted {
+    z-index: 1;
+    border-color: #f0a020;
+    background: #fff8e8;
+    box-shadow: 0 0 0 2px rgba(240, 160, 32, 0.24);
+}
+
 .schedule-card--density-compact {
     gap: 3px;
     padding: 5px 7px;
@@ -271,9 +301,9 @@ const handlePointerDrop = (event) => {
 
 .schedule-card--density-staging {
     height: 100%;
-    gap: 4px;
+    gap: 5px;
     padding: 6px 8px;
-    overflow: auto;
+    overflow: hidden;
 }
 
 .schedule-card__header {
@@ -364,6 +394,12 @@ const handlePointerDrop = (event) => {
     line-height: 1.25;
 }
 
+.schedule-card--density-staging .schedule-card__meta {
+    flex: 0 0 auto;
+    gap: 3px;
+    line-height: 1.35;
+}
+
 .schedule-card__details {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -410,9 +446,11 @@ const handlePointerDrop = (event) => {
 }
 
 .schedule-card--density-staging .schedule-card__actions {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    align-self: flex-end;
     margin-top: auto;
     max-height: none;
-    flex-wrap: wrap;
     overflow: visible;
 }
 
@@ -441,8 +479,10 @@ const handlePointerDrop = (event) => {
 
 
 .schedule-card--density-staging .schedule-card__actions :deep(.n-button) {
-    height: 20px;
-    min-width: 0;
+    width: 20px;
+    min-width: 20px;
+    height: 22px;
+    --n-padding: 0;
 }
 
 .schedule-card:hover .schedule-card__actions,
