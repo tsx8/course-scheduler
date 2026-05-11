@@ -10,13 +10,8 @@ import {
     NFlex,
     NIcon,
     NH2,
-    NLayout,
-    NLayoutContent,
-    NLayoutHeader,
     NSelect,
-    NSpace,
-    NStatistic,
-    NText
+    NSpace
 } from 'naive-ui';
 import { LocateOutline as LocateIcon } from '@vicons/ionicons5';
 import ScheduleIssueTag, { getIssueSeverityMeta } from '../components/ScheduleIssueTag.vue';
@@ -154,6 +149,11 @@ const locateIssue = (issue) => {
     } else if (focus.campus_id) {
         dataStore.selectedVenueIdsForCampusView = [];
     }
+    if (focus.course_id) {
+        dataStore.selectedCourseIdsForCampusView = [focus.course_id];
+    } else if (focus.campus_id) {
+        dataStore.selectedCourseIdsForCampusView = [];
+    }
 
     router.push({ name: focus.teacher_id ? 'TeacherTimetable' : 'CampusTimetable' });
 };
@@ -232,22 +232,18 @@ const columns = computed(() => [
 </script>
 
 <template>
-    <n-layout style="height: calc(100vh - 96px);">
-        <n-layout-header bordered style="padding: 12px 24px;">
+    <section class="issues-page">
+        <header class="issues-page__header">
             <n-flex justify="space-between" align="center" :wrap="false">
-                <div>
-                    <n-h2 style="margin: 0; white-space: nowrap;">问题检查</n-h2>
-                    <n-text depth="3">检查当前排课中的硬冲突与风险。</n-text>
+                <n-h2 style="margin: 0; white-space: nowrap; flex-shrink: 0;">问题检查</n-h2>
+                <div class="issues-page__stats" aria-label="问题统计">
+                    <span>冲突: <strong>{{ severityStats.hard }}</strong></span>
+                    <span>风险: <strong>{{ severityStats.warning }}</strong></span>
                 </div>
-                <n-space :wrap="false" align="center">
-                    <n-statistic label="冲突" :value="severityStats.hard" />
-                    <n-statistic label="风险" :value="severityStats.warning" />
-                </n-space>
             </n-flex>
-        </n-layout-header>
+        </header>
 
-        <n-layout-content content-style="padding: 24px;" style="height: calc(100vh - 156px); overflow: auto;"
-            :native-scrollbar="false">
+        <main class="issues-page__content">
             <n-space vertical size="large">
                 <n-card size="small">
                     <n-flex align="center">
@@ -268,6 +264,44 @@ const columns = computed(() => [
                     :bordered="true" :single-line="false" :pagination="{ pageSize: 12 }" style="width: 100%;" />
                 <n-empty v-else :description="emptyDescription" size="huge" style="padding: 64px 0;" />
             </n-space>
-        </n-layout-content>
-    </n-layout>
+        </main>
+    </section>
 </template>
+
+<style scoped>
+.issues-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.issues-page__header {
+    flex: 0 0 auto;
+    padding: 12px 24px;
+    border-bottom: 1px solid #efeff5;
+}
+
+.issues-page__stats {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: baseline;
+    gap: 16px;
+    color: #606266;
+    white-space: nowrap;
+}
+
+.issues-page__stats strong {
+    color: #303133;
+    font-size: 18px;
+    line-height: 1;
+}
+
+.issues-page__content {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 24px;
+    overflow: auto;
+}
+</style>
