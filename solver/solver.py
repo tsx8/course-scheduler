@@ -178,6 +178,10 @@ def solve_scheduling(data_manager, x_init=None):
                         x_by_teacher[t_idx].append((var, i_idx))
 
     print(f"Created {len(x)} potential assignment variables with indexing.")
+    if not x:
+        print("No schedulable assignments found; leaving schedule unchanged.")
+        dm.data.setdefault("scheduled_classes", [])
+        return dm.data
 
     if x_init is not None:
         hint_count = 0
@@ -518,9 +522,10 @@ if __name__ == "__main__":
 
     solution_data = solve_scheduling(data_manager, None)
 
-    if solution_data:
+    if solution_data is not None:
         with open(args.output_file, "w", encoding="utf-8") as f:
             json.dump(solution_data, f, ensure_ascii=False, indent=2)
         print(f"\nSuccessfully generated schedule. See {args.output_file} for details.")
     else:
         print("\nSolver did not find a solution.")
+        raise SystemExit(2)

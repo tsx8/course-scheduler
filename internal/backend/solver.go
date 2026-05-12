@@ -2,6 +2,7 @@ package backend
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -62,6 +63,9 @@ func (a *App) RunSolver() (AllData, error) {
 
 	content, err := os.ReadFile(outputPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return AllData{}, fmt.Errorf("solver completed without writing output\n%s", string(output))
+		}
 		return AllData{}, fmt.Errorf("read solver output: %w", err)
 	}
 
