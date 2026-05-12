@@ -91,17 +91,8 @@ func (a *App) RunSolver() (AllData, error) {
 }
 
 func (a *App) FinalizeAndClose(save bool) error {
-	hasChanges, err := a.HasUnsavedChanges()
-	if err != nil {
-		return err
-	}
-
 	if save {
 		if err := a.CommitData(); err != nil {
-			return err
-		}
-	} else if hasChanges {
-		if err := a.ClearTempData(); err != nil {
 			return err
 		}
 	}

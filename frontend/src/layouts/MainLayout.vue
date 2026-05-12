@@ -359,8 +359,8 @@ const triggerConfirm = async () => {
         dialog.warning({
             title: '有未保存的更改',
             content: '您当前有修改尚未保存。退出应用前，是否需要保存？',
-            positiveText: '保存并退出',
-            negativeText: '不保存直接退出',
+            positiveText: '保存',
+            negativeText: '不保存',
             closable: true,
             maskClosable: true,
             onPositiveClick: () => performFinalAction(true),
