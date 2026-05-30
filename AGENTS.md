@@ -39,6 +39,21 @@ Notes:
 - 完成前做与改动规模匹配的验证，并报告实际运行过的命令。
 - 用户指令永远高于本文件。
 
+## Agent skills
+本仓库已适配 Codex 中安装的 Matt Pocock 工程技能集。技能只补充工作流程；执行时仍以本文件的项目边界、命令和验证矩阵为准。
+
+### Invocation
+Codex 中不要依赖 Claude slash command 语义；需要时直接点名技能，例如“使用 `grill-with-docs` 梳理这个方案”、“使用 `diagnose` 排查这个 bug”、“使用 `to-issues` 拆分这个计划”。
+
+### Issue tracker
+Issues 和 PRD 默认发布到 GitHub Issues，使用 `gh` CLI。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+默认使用 `needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix` 五个 label。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+按单上下文仓库处理：根目录 `CONTEXT.md` 与 `docs/adr/` 按需创建和读取。详见 `docs/agents/domain.md`。
+
 ## Project Overview
 - Windows / macOS 桌面应用：`Vue 3 + Wails 2 + Go + SQLite + Python OR-Tools`。
 - 桌面宿主入口：`main.go`；本地后端：`internal/backend/`。
