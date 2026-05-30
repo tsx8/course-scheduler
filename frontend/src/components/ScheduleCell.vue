@@ -55,27 +55,14 @@
         </template>
     </ScheduleDropCell>
 
-    <n-modal v-model:show="showModal" preset="dialog" :title="modalTitle">
-        <n-form ref="formRef" :model="formValue" :rules="rules" label-placement="left" label-width="auto"
-            require-mark-placement="right-hanging">
-            <n-form-item label="授课课程" path="course_id">
-                <n-select v-model:value="formValue.course_id" placeholder="选择课程" :options="courseOptions"
-                    @update:value="handleCourseChange" />
-            </n-form-item>
-            <n-form-item label="上课校区" path="campus_id">
-                <n-select v-model:value="formValue.campus_id" placeholder="选择校区" :options="campusOptionsForForm"
-                    :disabled="!formValue.course_id" @update:value="handleCampusChange" />
-            </n-form-item>
-            <n-form-item label="上课场地" path="venue_id">
-                <n-select v-model:value="formValue.venue_id" placeholder="选择场地" :options="venueOptionsForForm"
-                    :disabled="!formValue.campus_id" />
-            </n-form-item>
-        </n-form>
-        <template #action>
-            <n-button @click="showModal = false">取消</n-button>
-            <n-button type="primary" @click="handleSubmit">确认</n-button>
-        </template>
-    </n-modal>
+    <ScheduleEditModal
+        v-model:show="showModal"
+        mode="teacher"
+        :teacher-id="teacherId"
+        :day-id="dayId"
+        :time-id="timeId"
+        :schedule="editingSchedule"
+    />
 
     <n-modal v-model:show="showConflictModal" preset="dialog" title="处理目标排课">
         <div class="conflict-choice">
@@ -95,7 +82,7 @@ import { ref, computed } from 'vue';
 import { useDataStore } from '../stores/data';
 import { useScheduleDragStore } from '../stores/scheduleDrag';
 import {
-    NButton, NButtonGroup, NIcon, NModal, NForm, NFormItem, NSelect, useMessage, useDialog
+    NButton, NButtonGroup, NIcon, NModal, useMessage, useDialog
 } from 'naive-ui';
 import {
     AddOutline as AddIcon,
@@ -103,6 +90,7 @@ import {
 } from '@vicons/ionicons5';
 import ScheduleCard from './ScheduleCard.vue';
 import ScheduleDropCell from './ScheduleDropCell.vue';
+import ScheduleEditModal from './ScheduleEditModal.vue';
 
 const props = defineProps({
     teacherId: { type: String, required: true },
@@ -117,9 +105,7 @@ const dialog = useDialog();
 
 const showModal = ref(false);
 const showConflictModal = ref(false);
-const isEditMode = ref(false);
-const formRef = ref(null);
-const formValue = ref({});
+const editingSchedule = ref(null);
 const conflictChoice = ref({ sourceScheduleId: null, targetScheduleId: null });
 
 const cellKey = computed(() => `${props.dayId}-${props.timeId}`);
@@ -150,23 +136,6 @@ const isCellFocused = computed(() => {
         && target.day_id === props.dayId
         && target.time_id === props.timeId;
 });
-
-const modalTitle = computed(() => (isEditMode.value ? '编辑排课' : '新增排课'));
-const courseOptions = computed(() => dataStore.teacherCourseOptions(props.teacherId));
-const campusOptionsForForm = computed(() => {
-    if (!formValue.value.course_id) return [];
-    return dataStore.courseCampusOptions(formValue.value.course_id, props.teacherId);
-});
-const venueOptionsForForm = computed(() => {
-    if (!formValue.value.course_id || !formValue.value.campus_id) return [];
-    return dataStore.courseVenueOptions(formValue.value.course_id, formValue.value.campus_id);
-});
-
-const rules = {
-    course_id: { required: true, message: '请选择授课课程', trigger: 'change' },
-    campus_id: { required: true, message: '请选择上课校区', trigger: 'change' },
-    venue_id: { required: true, message: '请选择上课场地', trigger: 'change' },
-};
 
 const readMaybeRef = (value) => value?.value ?? value;
 
@@ -252,18 +221,12 @@ const handlePointerDragStart = ({ schedule, event }) => {
 };
 
 const handleAdd = () => {
-    isEditMode.value = false;
-    formValue.value = {
-        course_id: null,
-        campus_id: null,
-        venue_id: null,
-    };
+    editingSchedule.value = null;
     showModal.value = true;
 };
 
 const handleEdit = (schedule) => {
-    isEditMode.value = true;
-    formValue.value = { ...schedule };
+    editingSchedule.value = { ...schedule };
     showModal.value = true;
 };
 
@@ -358,41 +321,6 @@ const handleConflictDisplace = () => {
     showConflictModal.value = false;
 };
 
-const handleSubmit = () => {
-    if (isBlocked.value) {
-        message.error('此时间段已被设为不排课，无法添加课程。');
-        return;
-    }
-
-    formRef.value?.validate((errors) => {
-        if (!errors) {
-            const scheduleData = {
-                ...formValue.value,
-                day_id: props.dayId,
-                time_id: props.timeId,
-            };
-
-            if (isEditMode.value) {
-                dataStore.updateSchedule(props.teacherId, scheduleData);
-                message.success('排课更新成功');
-            } else {
-                dataStore.addSchedule(props.teacherId, scheduleData);
-                message.success('新增排课成功');
-            }
-            showModal.value = false;
-        } else {
-            message.error('请填写完整的排课信息');
-        }
-    });
-};
-
-const handleCourseChange = () => {
-    formValue.value.campus_id = null;
-    formValue.value.venue_id = null;
-};
-const handleCampusChange = () => {
-    formValue.value.venue_id = null;
-};
 </script>
 
 <style scoped>

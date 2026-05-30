@@ -7,6 +7,7 @@ import { AddOutline as AddIcon, DownloadOutline as ExportIcon, TrashOutline as D
 import ScheduleCard from '../components/ScheduleCard.vue';
 import ScheduleDropCell from '../components/ScheduleDropCell.vue';
 import ScheduleDetailDrawer from '../components/ScheduleDetailDrawer.vue';
+import ScheduleEditModal from '../components/ScheduleEditModal.vue';
 
 const dataStore = useDataStore();
 const scheduleDrag = useScheduleDragStore();
@@ -60,6 +61,11 @@ const detailDrawer = ref({
     show: false,
     title: '排课详情',
     issues: [],
+});
+const scheduleEditor = ref({
+    show: false,
+    target: null,
+    schedule: null,
 });
 
 
@@ -612,6 +618,18 @@ const conflictChoiceAvailability = computed(() => {
 const canApplyConflictChoice = (choice) => Boolean(conflictChoiceAvailability.value[choice]);
 const hasAvailableConflictChoice = computed(() => Object.values(conflictChoiceAvailability.value).some(Boolean));
 
+const openAddScheduleModal = (target) => {
+    scheduleEditor.value = {
+        show: true,
+        target: { ...target },
+        schedule: {
+            course_id: selectedCourseIds.value.length === 1 ? selectedCourseIds.value[0] : null,
+            teacher_id: selectedTeacherIds.value.length === 1 ? selectedTeacherIds.value[0] : null,
+            campus_id: target.campus_id,
+        },
+    };
+};
+
 const openConflictModal = (sourceScheduleId, targetScheduleId, targetPlacement = null) => {
     if (!sourceScheduleId || !targetScheduleId) return;
     if (sourceScheduleId === targetScheduleId) {
@@ -699,31 +717,71 @@ const renderCounterNode = (target, actualCount) => {
             whiteSpace: 'nowrap',
         }
     }, [
-        h('span', {
-            class: [
-                'campus-cell-counter__label',
-                isOverbooked ? 'campus-cell-counter__label--overbooked' : null,
-            ]
-        }, `容量：${actualCount}/`),
-        h(NInputNumber, {
-            value: expectedCount,
-            'onUpdate:value': (value) => {
-                dataStore.updateCampusScheduleDensity(target.campus_id, target.day_id, target.time_id, value);
-            },
-            size: 'tiny',
-            min: 0,
-            precision: 0,
-            showButton: false,
-            class: 'campus-cell-counter__input',
+        h('div', {
+            class: 'campus-cell-counter__density',
             style: {
-                width: '36px',
-                flex: '0 0 36px',
-                minWidth: '36px',
+                display: 'flex',
+                alignItems: 'center',
+                minWidth: '0',
             },
-            'aria-label': '期望容量',
-        })
+        }, [
+            h('span', {
+                class: [
+                    'campus-cell-counter__label',
+                    isOverbooked ? 'campus-cell-counter__label--overbooked' : null,
+                ]
+            }, `容量：${actualCount}/`),
+            h(NInputNumber, {
+                value: expectedCount,
+                'onUpdate:value': (value) => {
+                    dataStore.updateCampusScheduleDensity(target.campus_id, target.day_id, target.time_id, value);
+                },
+                size: 'tiny',
+                min: 0,
+                precision: 0,
+                showButton: false,
+                class: 'campus-cell-counter__input',
+                style: {
+                    width: '36px',
+                    flex: '0 0 36px',
+                    minWidth: '36px',
+                },
+                'aria-label': '期望容量',
+            })
+        ]),
+        renderAddScheduleButton(target)
     ]);
 };
+
+const renderAddScheduleButton = (target) => {
+    return h(NButton, {
+        circle: true,
+        dashed: true,
+        size: 'tiny',
+        type: 'primary',
+        title: '新增排课',
+        disabled: !target.campus_id,
+        onPointerdown: event => event.stopPropagation(),
+        onPointerup: event => event.stopPropagation(),
+        onClick: event => {
+            event.stopPropagation();
+            openAddScheduleModal(target);
+        },
+    }, {
+        icon: () => h(NIcon, { component: AddIcon }),
+    });
+};
+
+const renderFilteredCellActionNode = (target) => h('div', {
+    class: 'campus-cell-actions',
+    style: {
+        display: 'flex',
+        justifyContent: 'center',
+        marginBottom: '6px',
+    },
+}, [
+    renderAddScheduleButton(target),
+]);
 
 const handleDeleteSchedule = (schedule) => {
     dialog.warning({
@@ -776,7 +834,7 @@ const renderCell = (dayId, timeId, schedulesInCell) => {
         onIssueClick: () => openCellDetail(target, schedulesInCell),
     }, {
         default: () => hasActiveScheduleFilter.value
-            ? cards
+            ? [renderFilteredCellActionNode(target), ...cards]
             : [renderCounterNode(target, schedulesInCell.length), ...cards],
     });
 };
@@ -821,32 +879,36 @@ const handleExportToCsv = () => {
         return;
     }
 
-    const headers = ['时间', ...days.value.map(d => d.value)];
-    const rows = tableData.value.map(row => {
-        const rowData = [row.time_slot];
-        days.value.forEach(day => {
-            const schedules = row[day.id];
-            if (schedules.length === 0) {
-                rowData.push('');
-            } else {
-                const cellContent = schedules.map(({ schedule, teacher }) => {
-                    const course = dataStore.courses.find(c => c.id === schedule.course_id);
-                    const venue = dataStore.venues.find(v => v.id === schedule.venue_id);
+    const escapeCsvCell = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const findNameById = (records, id, fallback) => {
+        return records.find(record => record.id === id)?.name || fallback;
+    };
+    const scheduleTriplet = ({ schedule, teacher }) => {
+        return [
+            findNameById(dataStore.courses, schedule.course_id, '未知课程'),
+            teacher?.name || findNameById(dataStore.teachers, schedule.teacher_id, '未知教师'),
+            findNameById(dataStore.venues, schedule.venue_id, '未知场地'),
+        ];
+    };
 
-                    const courseName = course?.name || '未知课程';
-                    const teacherName = teacher?.name || '未知教师';
-                    const venueName = venue?.name || '未知场地';
-
-                    return `${courseName} (${teacherName} - ${venueName})`;
-                }).join('\n');
-
-                rowData.push(`"${cellContent.replace(/"/g, '""')}"`);
-            }
+    const headerRows = [
+        ['时间', ...days.value.flatMap(day => [day.value, '', ''])],
+        ['', ...days.value.flatMap(() => ['项目', '教师', '地点'])],
+    ];
+    const bodyRows = tableData.value.flatMap(row => {
+        const maxScheduleCount = Math.max(1, ...days.value.map(day => row[day.id].length));
+        return Array.from({ length: maxScheduleCount }, (_, scheduleIndex) => {
+            const rowData = [scheduleIndex === 0 ? row.time_slot : ''];
+            days.value.forEach(day => {
+                const scheduleEntry = row[day.id][scheduleIndex];
+                rowData.push(...(scheduleEntry ? scheduleTriplet(scheduleEntry) : ['', '', '']));
+            });
+            return rowData;
         });
-        return rowData.join(',');
     });
-
-    const csvContent = [headers.join(','), ...rows].join('\n');
+    const csvContent = [...headerRows, ...bodyRows]
+        .map(row => row.map(escapeCsvCell).join(','))
+        .join('\n');
 
     const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
 
@@ -958,6 +1020,19 @@ watch(() => dataStore.campuses, (newCampuses) => {
                 </n-flex>
             </template>
         </n-modal>
+
+        <ScheduleEditModal
+            v-model:show="scheduleEditor.show"
+            mode="campus"
+            :campus-id="scheduleEditor.target?.campus_id || ''"
+            :venue-id="scheduleEditor.target?.venue_id || ''"
+            :teacher-scope-ids="selectedTeacherIds"
+            :course-scope-ids="selectedCourseIds"
+            :venue-scope-ids="selectedVenueIds"
+            :day-id="scheduleEditor.target?.day_id || ''"
+            :time-id="scheduleEditor.target?.time_id || ''"
+            :schedule="scheduleEditor.schedule"
+        />
 
         <ScheduleDetailDrawer
             v-model:show="detailDrawer.show"
