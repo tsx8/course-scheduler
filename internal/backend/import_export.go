@@ -27,7 +27,7 @@ func (a *App) ImportJSON(filePath string) (ImportStats, error) {
 		Courses:   len(allData.Courses),
 		Schedules: len(allData.ScheduledClasses),
 	}
-	if err := a.SaveTempData(allData); err != nil {
+	if err := a.saveImportedTempData(allData); err != nil {
 		return ImportStats{}, err
 	}
 	return stats, nil
@@ -63,7 +63,7 @@ func (a *App) ImportDatabase(filePath string) (ImportStats, error) {
 		}
 	}
 
-	allData, err := loadAllDataFromConnection(sourceDB, false)
+	allData, err := loadAllDataForExport(sourceDB, false)
 	if err != nil {
 		return ImportStats{}, err
 	}
@@ -73,7 +73,7 @@ func (a *App) ImportDatabase(filePath string) (ImportStats, error) {
 		Courses:   len(allData.Courses),
 		Schedules: len(allData.ScheduledClasses),
 	}
-	if err := a.SaveTempData(allData); err != nil {
+	if err := a.saveImportedTempData(allData); err != nil {
 		return ImportStats{}, err
 	}
 	return stats, nil
@@ -90,7 +90,7 @@ func (a *App) ExportDatabase(filePath string) error {
 		return fmt.Errorf("init target schema: %w", err)
 	}
 
-	allData, err := loadAllDataFromConnection(a.db, false)
+	allData, err := loadAllDataForExport(a.db, false)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func (a *App) ExportDatabase(filePath string) error {
 }
 
 func (a *App) ExportJSON(filePath string) error {
-	allData, err := loadAllDataFromConnection(a.db, false)
+	allData, err := loadAllDataForExport(a.db, false)
 	if err != nil {
 		return err
 	}

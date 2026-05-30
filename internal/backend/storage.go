@@ -14,6 +14,19 @@ type queryExecutor interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
+const (
+	defaultSchedulePlanID      = "default-schedule-plan"
+	defaultSchedulePlanName    = "默认课表"
+	activeSchedulePlanStateKey = "active_schedule_plan_id"
+)
+
+type scheduledClassLoadScope int
+
+const (
+	scheduledClassLoadActive scheduledClassLoadScope = iota
+	scheduledClassLoadAll
+)
+
 func initDatabase(db *sql.DB) error {
 	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		return err
@@ -22,6 +35,12 @@ func initDatabase(db *sql.DB) error {
 		return err
 	}
 	if err := migrateScheduledClassState(db); err != nil {
+		return err
+	}
+	if err := migrateSchedulePlanStorage(db); err != nil {
+		return err
+	}
+	if err := ensureSchedulePlanIndexes(db); err != nil {
 		return err
 	}
 	return nil
@@ -39,6 +58,19 @@ func (a *App) SaveTempData(content AllData) error {
 	tx, err := a.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin temp transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := writeActiveAllDataToTemp(tx, content); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (a *App) saveImportedTempData(content AllData) error {
+	tx, err := a.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin import temp transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -63,7 +95,7 @@ func (a *App) CommitData() error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	content, err := loadAllDataFromConnection(tx, true)
+	content, err := loadAllDataForExport(tx, true)
 	if err != nil {
 		return err
 	}
@@ -91,7 +123,9 @@ func (a *App) ListCommittedTeachers() ([]Teacher, error) {
 
 func hasUnsavedChanges(conn queryExecutor) (bool, error) {
 	tempTables := []string{
+		"app_metadata_temp",
 		"scheduled_classes_temp",
+		"schedule_plans_temp",
 		"teacher_unavailability_temp",
 		"campus_filter_view_courses_temp",
 		"campus_filter_view_teachers_temp",
@@ -124,14 +158,22 @@ func hasUnsavedChanges(conn queryExecutor) (bool, error) {
 }
 
 func loadAllData(conn queryExecutor) (AllData, error) {
-	var hasTempData bool
-	if err := conn.QueryRow("SELECT EXISTS(SELECT 1 FROM time_slots_temp)").Scan(&hasTempData); err != nil {
+	hasTempData, err := hasUnsavedChanges(conn)
+	if err != nil {
 		return AllData{}, fmt.Errorf("check temp data: %w", err)
 	}
 	return loadAllDataFromConnection(conn, hasTempData)
 }
 
 func loadAllDataFromConnection(conn queryExecutor, useTemp bool) (AllData, error) {
+	return loadAllDataFromConnectionWithScheduleScope(conn, useTemp, scheduledClassLoadActive)
+}
+
+func loadAllDataForExport(conn queryExecutor, useTemp bool) (AllData, error) {
+	return loadAllDataFromConnectionWithScheduleScope(conn, useTemp, scheduledClassLoadAll)
+}
+
+func loadAllDataFromConnectionWithScheduleScope(conn queryExecutor, useTemp bool, scope scheduledClassLoadScope) (AllData, error) {
 	timeSlots, err := loadTimeSlots(conn, useTemp)
 	if err != nil {
 		return AllData{}, err
@@ -168,7 +210,15 @@ func loadAllDataFromConnection(conn queryExecutor, useTemp bool) (AllData, error
 	if err != nil {
 		return AllData{}, err
 	}
-	scheduledClasses, err := loadScheduledClasses(conn, useTemp)
+	schedulePlans, err := loadSchedulePlans(conn, useTemp)
+	if err != nil {
+		return AllData{}, err
+	}
+	activeSchedulePlanID, err := loadActiveSchedulePlanID(conn, useTemp, schedulePlans)
+	if err != nil {
+		return AllData{}, err
+	}
+	scheduledClasses, err := loadScheduledClasses(conn, useTemp, activeSchedulePlanID, scope)
 	if err != nil {
 		return AllData{}, err
 	}
@@ -195,6 +245,8 @@ func loadAllDataFromConnection(conn queryExecutor, useTemp bool) (AllData, error
 		CourseVenues:          courseVenues,
 		TeacherCourses:        teacherCourses,
 		TeacherCampuses:       teacherCampuses,
+		SchedulePlans:         schedulePlans,
+		ActiveSchedulePlanID:  activeSchedulePlanID,
 		ScheduledClasses:      scheduledClasses,
 		TeacherUnavailability: teacherUnavailability,
 		ScheduleDensity:       scheduleDensity,
@@ -413,6 +465,106 @@ func migrateScheduledClassState(conn queryExecutor) error {
 	return nil
 }
 
+func migrateSchedulePlanStorage(conn queryExecutor) error {
+	for _, table := range []string{"scheduled_classes", "scheduled_classes_temp"} {
+		exists, err := tableExists(conn, table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+
+		hasColumn, err := columnExists(conn, table, "schedule_plan_id")
+		if err != nil {
+			return err
+		}
+		if !hasColumn {
+			if _, err := conn.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN schedule_plan_id TEXT", table)); err != nil {
+				return fmt.Errorf("add schedule_plan_id to %s: %w", table, err)
+			}
+		}
+	}
+
+	hasTempData, err := hasUnsavedChanges(conn)
+	if err != nil {
+		return err
+	}
+	if err := ensureDefaultSchedulePlan(conn, false); err != nil {
+		return err
+	}
+	if hasTempData {
+		if err := ensureDefaultSchedulePlan(conn, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureSchedulePlanIndexes(conn queryExecutor) error {
+	for _, index := range []struct {
+		name  string
+		table string
+	}{
+		{name: "idx_scheduled_classes_schedule_plan_id", table: "scheduled_classes"},
+		{name: "idx_scheduled_classes_temp_schedule_plan_id", table: "scheduled_classes_temp"},
+	} {
+		if _, err := conn.Exec(fmt.Sprintf(
+			"CREATE INDEX IF NOT EXISTS %s ON %s(schedule_plan_id)",
+			index.name,
+			index.table,
+		)); err != nil {
+			return fmt.Errorf("create %s: %w", index.name, err)
+		}
+	}
+	return nil
+}
+
+func ensureDefaultSchedulePlan(conn queryExecutor, useTemp bool) error {
+	planTable := tableName("schedule_plans", useTemp)
+	stateTable := tableName("app_metadata", useTemp)
+	scheduleTable := tableName("scheduled_classes", useTemp)
+
+	var planCount int
+	if err := conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", planTable)).Scan(&planCount); err != nil {
+		return fmt.Errorf("count schedule plans: %w", err)
+	}
+	if planCount == 0 {
+		if _, err := conn.Exec(
+			fmt.Sprintf("INSERT INTO %s (id, name, sort_order) VALUES (?, ?, 0)", planTable),
+			defaultSchedulePlanID,
+			defaultSchedulePlanName,
+		); err != nil {
+			return fmt.Errorf("ensure default schedule plan: %w", err)
+		}
+	}
+
+	plans, err := loadSchedulePlans(conn, useTemp)
+	if err != nil {
+		return err
+	}
+	activeID, err := loadActiveSchedulePlanID(conn, useTemp, plans)
+	if err != nil {
+		return err
+	}
+
+	if _, err := conn.Exec(
+		fmt.Sprintf("UPDATE %s SET schedule_plan_id = ? WHERE schedule_plan_id IS NULL OR schedule_plan_id = ''", scheduleTable),
+		activeID,
+	); err != nil {
+		return fmt.Errorf("migrate scheduled class plan ids: %w", err)
+	}
+
+	if _, err := conn.Exec(
+		fmt.Sprintf("INSERT OR REPLACE INTO %s (key, value) VALUES (?, ?)", stateTable),
+		activeSchedulePlanStateKey,
+		activeID,
+	); err != nil {
+		return fmt.Errorf("ensure active schedule plan: %w", err)
+	}
+	return nil
+}
+
 func loadTeacherCampusesFromLegacy(conn queryExecutor, useTemp bool) ([]TeacherCampus, error) {
 	teacherTable := tableName("teachers", useTemp)
 	campusTable := tableName("campuses", useTemp)
@@ -576,8 +728,79 @@ func loadTeacherCourses(conn queryExecutor, useTemp bool) ([]TeacherCourse, erro
 	return relations, rows.Err()
 }
 
-func loadScheduledClasses(conn queryExecutor, useTemp bool) ([]ScheduledClass, error) {
+func loadSchedulePlans(conn queryExecutor, useTemp bool) ([]SchedulePlan, error) {
+	table := tableName("schedule_plans", useTemp)
+	exists, err := tableExists(conn, table)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return []SchedulePlan{{ID: defaultSchedulePlanID, Name: defaultSchedulePlanName, SortOrder: 0}}, nil
+	}
+
+	rows, err := conn.Query(fmt.Sprintf("SELECT id, name, sort_order FROM %s ORDER BY sort_order, name, id", table))
+	if err != nil {
+		return nil, fmt.Errorf("query %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	plans := []SchedulePlan{}
+	for rows.Next() {
+		var plan SchedulePlan
+		if err := rows.Scan(&plan.ID, &plan.Name, &plan.SortOrder); err != nil {
+			return nil, fmt.Errorf("scan %s: %w", table, err)
+		}
+		plans = append(plans, plan)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(plans) == 0 {
+		return []SchedulePlan{{ID: defaultSchedulePlanID, Name: defaultSchedulePlanName, SortOrder: 0}}, nil
+	}
+	return plans, nil
+}
+
+func loadActiveSchedulePlanID(conn queryExecutor, useTemp bool, plans []SchedulePlan) (string, error) {
+	if len(plans) == 0 {
+		return defaultSchedulePlanID, nil
+	}
+
+	validPlanIDs := make(map[string]struct{}, len(plans))
+	for _, plan := range plans {
+		validPlanIDs[plan.ID] = struct{}{}
+	}
+
+	table := tableName("app_metadata", useTemp)
+	exists, err := tableExists(conn, table)
+	if err != nil {
+		return "", err
+	}
+	if exists {
+		var activeID string
+		err := conn.QueryRow(fmt.Sprintf("SELECT value FROM %s WHERE key = ?", table), activeSchedulePlanStateKey).Scan(&activeID)
+		if err != nil && err != sql.ErrNoRows {
+			return "", fmt.Errorf("load active schedule plan: %w", err)
+		}
+		if _, ok := validPlanIDs[activeID]; ok {
+			return activeID, nil
+		}
+	}
+
+	return plans[0].ID, nil
+}
+
+func loadScheduledClasses(conn queryExecutor, useTemp bool, activeSchedulePlanID string, scope scheduledClassLoadScope) ([]ScheduledClass, error) {
 	table := tableName("scheduled_classes", useTemp)
+	schedulePlanSelect := fmt.Sprintf("'%s'", defaultSchedulePlanID)
+	hasSchedulePlanID, err := columnExists(conn, table, "schedule_plan_id")
+	if err != nil {
+		return nil, err
+	}
+	if hasSchedulePlanID {
+		schedulePlanSelect = "schedule_plan_id"
+	}
+
 	isLockedSelect := "1"
 	hasIsLocked, err := columnExists(conn, table, "is_locked")
 	if err != nil {
@@ -605,13 +828,22 @@ func loadScheduledClasses(conn queryExecutor, useTemp bool) ([]ScheduledClass, e
 		stagedOrderSelect = "staged_order"
 	}
 
+	whereClause := ""
+	args := []any{}
+	if scope == scheduledClassLoadActive && hasSchedulePlanID {
+		whereClause = " WHERE schedule_plan_id = ?"
+		args = append(args, activeSchedulePlanID)
+	}
+
 	rows, err := conn.Query(fmt.Sprintf(
-		"SELECT id, teacher_id, course_id, day_id, time_id, campus_id, venue_id, %s, %s, %s FROM %s",
+		"SELECT id, %s, teacher_id, course_id, day_id, time_id, campus_id, venue_id, %s, %s, %s FROM %s%s",
+		schedulePlanSelect,
 		isLockedSelect,
 		isStagedSelect,
 		stagedOrderSelect,
 		table,
-	))
+		whereClause,
+	), args...)
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
@@ -622,8 +854,11 @@ func loadScheduledClasses(conn queryExecutor, useTemp bool) ([]ScheduledClass, e
 		var class ScheduledClass
 		var isLocked int
 		var isStaged int
-		if err := rows.Scan(&class.ID, &class.TeacherID, &class.CourseID, &class.DayID, &class.TimeID, &class.CampusID, &class.VenueID, &isLocked, &isStaged, &class.StagedOrder); err != nil {
+		if err := rows.Scan(&class.ID, &class.SchedulePlanID, &class.TeacherID, &class.CourseID, &class.DayID, &class.TimeID, &class.CampusID, &class.VenueID, &isLocked, &isStaged, &class.StagedOrder); err != nil {
 			return nil, fmt.Errorf("scan %s: %w", table, err)
+		}
+		if class.SchedulePlanID == "" {
+			class.SchedulePlanID = activeSchedulePlanID
 		}
 		class.IsLocked = isLocked != 0
 		class.IsStaged = isStaged != 0
@@ -727,7 +962,151 @@ func loadCampusFilterViewRelationIDs(conn queryExecutor, useTemp bool, baseTable
 	return ids, rows.Err()
 }
 
+func normalizeSchedulePlanData(data *AllData) {
+	plans := make([]SchedulePlan, 0, len(data.SchedulePlans))
+	seenPlanIDs := map[string]struct{}{}
+	for index, plan := range data.SchedulePlans {
+		plan.ID = strings.TrimSpace(plan.ID)
+		plan.Name = strings.TrimSpace(plan.Name)
+		if plan.ID == "" {
+			continue
+		}
+		if _, exists := seenPlanIDs[plan.ID]; exists {
+			continue
+		}
+		if plan.Name == "" {
+			plan.Name = defaultSchedulePlanName
+		}
+		if plan.SortOrder == 0 && index > 0 {
+			plan.SortOrder = index
+		}
+		seenPlanIDs[plan.ID] = struct{}{}
+		plans = append(plans, plan)
+	}
+	if len(plans) == 0 {
+		plans = append(plans, SchedulePlan{ID: defaultSchedulePlanID, Name: defaultSchedulePlanName, SortOrder: 0})
+		seenPlanIDs[defaultSchedulePlanID] = struct{}{}
+	}
+
+	activeID := strings.TrimSpace(data.ActiveSchedulePlanID)
+	if _, ok := seenPlanIDs[activeID]; !ok {
+		activeID = plans[0].ID
+	}
+
+	for index := range data.ScheduledClasses {
+		planID := strings.TrimSpace(data.ScheduledClasses[index].SchedulePlanID)
+		if _, ok := seenPlanIDs[planID]; !ok {
+			planID = activeID
+		}
+		data.ScheduledClasses[index].SchedulePlanID = planID
+	}
+
+	data.SchedulePlans = plans
+	data.ActiveSchedulePlanID = activeID
+}
+
+type scheduleReferenceSet struct {
+	teacherIDs map[string]struct{}
+	courseIDs  map[string]struct{}
+	dayIDs     map[string]struct{}
+	timeIDs    map[string]struct{}
+	campusIDs  map[string]struct{}
+	venueIDs   map[string]struct{}
+}
+
+func buildScheduleReferenceSet(data AllData) scheduleReferenceSet {
+	refs := scheduleReferenceSet{
+		teacherIDs: map[string]struct{}{},
+		courseIDs:  map[string]struct{}{},
+		dayIDs:     map[string]struct{}{},
+		timeIDs:    map[string]struct{}{},
+		campusIDs:  map[string]struct{}{},
+		venueIDs:   map[string]struct{}{},
+	}
+	for _, teacher := range data.Teachers {
+		refs.teacherIDs[teacher.ID] = struct{}{}
+	}
+	for _, course := range data.Courses {
+		refs.courseIDs[course.ID] = struct{}{}
+	}
+	for _, day := range data.Day {
+		refs.dayIDs[day.ID] = struct{}{}
+	}
+	for _, slot := range data.Time {
+		refs.timeIDs[slot.ID] = struct{}{}
+	}
+	for _, campus := range data.Campuses {
+		refs.campusIDs[campus.ID] = struct{}{}
+	}
+	for _, venue := range data.Venues {
+		refs.venueIDs[venue.ID] = struct{}{}
+	}
+	return refs
+}
+
+func hasReference(references map[string]struct{}, id string) bool {
+	_, ok := references[id]
+	return ok
+}
+
+func scheduleClassReferencesExist(class ScheduledClass, refs scheduleReferenceSet) bool {
+	return hasReference(refs.teacherIDs, class.TeacherID) &&
+		hasReference(refs.courseIDs, class.CourseID) &&
+		hasReference(refs.dayIDs, class.DayID) &&
+		hasReference(refs.timeIDs, class.TimeID) &&
+		hasReference(refs.campusIDs, class.CampusID) &&
+		hasReference(refs.venueIDs, class.VenueID)
+}
+
+func schedulePlanIDSet(plans []SchedulePlan) map[string]struct{} {
+	planIDs := make(map[string]struct{}, len(plans))
+	for _, plan := range plans {
+		planIDs[plan.ID] = struct{}{}
+	}
+	return planIDs
+}
+
+func writeActiveAllDataToTemp(tx *sql.Tx, content AllData) error {
+	data := content
+	normalizeSchedulePlanData(&data)
+
+	sourceUseTemp, err := hasUnsavedChanges(tx)
+	if err != nil {
+		return err
+	}
+
+	existingSchedules, err := loadScheduledClasses(tx, sourceUseTemp, data.ActiveSchedulePlanID, scheduledClassLoadAll)
+	if err != nil {
+		return err
+	}
+
+	validPlanIDs := schedulePlanIDSet(data.SchedulePlans)
+	refs := buildScheduleReferenceSet(data)
+	nextSchedules := make([]ScheduledClass, 0, len(data.ScheduledClasses)+len(existingSchedules))
+	for _, class := range data.ScheduledClasses {
+		class.SchedulePlanID = data.ActiveSchedulePlanID
+		nextSchedules = append(nextSchedules, class)
+	}
+	for _, class := range existingSchedules {
+		if class.SchedulePlanID == data.ActiveSchedulePlanID {
+			continue
+		}
+		if _, ok := validPlanIDs[class.SchedulePlanID]; !ok {
+			continue
+		}
+		if !scheduleClassReferencesExist(class, refs) {
+			continue
+		}
+		nextSchedules = append(nextSchedules, class)
+	}
+
+	data.ScheduledClasses = nextSchedules
+	return writeAllDataToTables(tx, data, true)
+}
+
 func writeAllDataToTables(tx *sql.Tx, data AllData, useTemp bool) error {
+	normalizeSchedulePlanData(&data)
+
 	if err := clearTables(tx, useTemp); err != nil {
 		return err
 	}
@@ -826,6 +1205,25 @@ func writeAllDataToTables(tx *sql.Tx, data AllData, useTemp bool) error {
 		}
 	}
 
+	for _, plan := range data.SchedulePlans {
+		if _, err := tx.Exec(
+			fmt.Sprintf("INSERT INTO %s (id, name, sort_order) VALUES (?, ?, ?)", tableName("schedule_plans", useTemp)),
+			plan.ID,
+			plan.Name,
+			plan.SortOrder,
+		); err != nil {
+			return fmt.Errorf("insert schedule plan: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(
+		fmt.Sprintf("INSERT INTO %s (key, value) VALUES (?, ?)", tableName("app_metadata", useTemp)),
+		activeSchedulePlanStateKey,
+		data.ActiveSchedulePlanID,
+	); err != nil {
+		return fmt.Errorf("insert active schedule plan state: %w", err)
+	}
+
 	for _, view := range data.CampusFilterViews {
 		if _, err := tx.Exec(
 			fmt.Sprintf("INSERT INTO %s (id, name, campus_id, sort_order) VALUES (?, ?, ?, ?)", tableName("campus_filter_views", useTemp)),
@@ -861,8 +1259,9 @@ func writeAllDataToTables(tx *sql.Tx, data AllData, useTemp bool) error {
 
 	for _, class := range data.ScheduledClasses {
 		if _, err := tx.Exec(
-			fmt.Sprintf("INSERT INTO %s (id, teacher_id, course_id, day_id, time_id, campus_id, venue_id, is_locked, is_staged, staged_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", tableName("scheduled_classes", useTemp)),
+			fmt.Sprintf("INSERT INTO %s (id, schedule_plan_id, teacher_id, course_id, day_id, time_id, campus_id, venue_id, is_locked, is_staged, staged_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", tableName("scheduled_classes", useTemp)),
 			class.ID,
+			class.SchedulePlanID,
 			class.TeacherID,
 			class.CourseID,
 			class.DayID,
@@ -915,7 +1314,9 @@ func insertCampusFilterViewRelationIDs(tx *sql.Tx, useTemp bool, baseTable strin
 
 func clearTables(tx *sql.Tx, useTemp bool) error {
 	tables := []string{
+		tableName("app_metadata", useTemp),
 		tableName("scheduled_classes", useTemp),
+		tableName("schedule_plans", useTemp),
 		tableName("teacher_unavailability", useTemp),
 		tableName("campus_filter_view_courses", useTemp),
 		tableName("campus_filter_view_teachers", useTemp),
@@ -943,7 +1344,9 @@ func clearTables(tx *sql.Tx, useTemp bool) error {
 
 func truncateAllTempTables(tx *sql.Tx) error {
 	tables := []string{
+		"app_metadata_temp",
 		"scheduled_classes_temp",
+		"schedule_plans_temp",
 		"teacher_unavailability_temp",
 		"campus_filter_view_courses_temp",
 		"campus_filter_view_teachers_temp",
@@ -971,7 +1374,9 @@ func truncateAllTempTables(tx *sql.Tx) error {
 
 func clearAllTempTables(conn queryExecutor) error {
 	tables := []string{
+		"app_metadata_temp",
 		"scheduled_classes_temp",
+		"schedule_plans_temp",
 		"teacher_unavailability_temp",
 		"campus_filter_view_courses_temp",
 		"campus_filter_view_teachers_temp",
@@ -1081,8 +1486,20 @@ CREATE TABLE IF NOT EXISTS teacher_unavailability (
     FOREIGN KEY (time_id) REFERENCES time_slots(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS schedule_plans (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS app_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS scheduled_classes (
     id TEXT PRIMARY KEY,
+    schedule_plan_id TEXT NOT NULL DEFAULT 'default-schedule-plan',
     teacher_id TEXT NOT NULL,
     course_id TEXT NOT NULL,
     day_id TEXT NOT NULL,
@@ -1092,6 +1509,7 @@ CREATE TABLE IF NOT EXISTS scheduled_classes (
     is_locked INTEGER NOT NULL DEFAULT 0,
     is_staged INTEGER NOT NULL DEFAULT 0,
     staged_order INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (schedule_plan_id) REFERENCES schedule_plans(id) ON DELETE CASCADE,
     FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE,
     FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
     FOREIGN KEY (day_id) REFERENCES days(id) ON DELETE CASCADE,
@@ -1212,8 +1630,20 @@ CREATE TABLE IF NOT EXISTS teacher_unavailability_temp (
     FOREIGN KEY (time_id) REFERENCES time_slots_temp(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS schedule_plans_temp (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS app_metadata_temp (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS scheduled_classes_temp (
     id TEXT PRIMARY KEY,
+    schedule_plan_id TEXT NOT NULL DEFAULT 'default-schedule-plan',
     teacher_id TEXT NOT NULL,
     course_id TEXT NOT NULL,
     day_id TEXT NOT NULL,
@@ -1223,6 +1653,7 @@ CREATE TABLE IF NOT EXISTS scheduled_classes_temp (
     is_locked INTEGER NOT NULL DEFAULT 0,
     is_staged INTEGER NOT NULL DEFAULT 0,
     staged_order INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (schedule_plan_id) REFERENCES schedule_plans_temp(id) ON DELETE CASCADE,
     FOREIGN KEY (teacher_id) REFERENCES teachers_temp(id) ON DELETE CASCADE,
     FOREIGN KEY (course_id) REFERENCES courses_temp(id) ON DELETE CASCADE,
     FOREIGN KEY (day_id) REFERENCES days_temp(id) ON DELETE CASCADE,

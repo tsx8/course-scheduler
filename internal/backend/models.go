@@ -12,6 +12,8 @@ type AllData struct {
 	CourseVenues          []CourseVenue           `json:"course_venues"`
 	TeacherCourses        []TeacherCourse         `json:"teacher_courses"`
 	TeacherCampuses       []TeacherCampus         `json:"teacher_campuses"`
+	SchedulePlans         []SchedulePlan          `json:"schedule_plans"`
+	ActiveSchedulePlanID  string                  `json:"active_schedule_plan_id"`
 	ScheduledClasses      []ScheduledClass        `json:"scheduled_classes"`
 	TeacherUnavailability []TeacherUnavailability `json:"teacher_unavailability"`
 	ScheduleDensity       []ScheduleDensity       `json:"schedule_density"`
@@ -84,17 +86,24 @@ type TeacherCampus struct {
 	CampusID  string `json:"campus_id"`
 }
 
+type SchedulePlan struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	SortOrder int    `json:"sort_order"`
+}
+
 type ScheduledClass struct {
-	ID          string `json:"id"`
-	TeacherID   string `json:"teacher_id"`
-	CourseID    string `json:"course_id"`
-	DayID       string `json:"day_id"`
-	TimeID      string `json:"time_id"`
-	CampusID    string `json:"campus_id"`
-	VenueID     string `json:"venue_id"`
-	IsLocked    bool   `json:"is_locked"`
-	IsStaged    bool   `json:"is_staged"`
-	StagedOrder int    `json:"staged_order"`
+	ID             string `json:"id"`
+	SchedulePlanID string `json:"schedule_plan_id,omitempty"`
+	TeacherID      string `json:"teacher_id"`
+	CourseID       string `json:"course_id"`
+	DayID          string `json:"day_id"`
+	TimeID         string `json:"time_id"`
+	CampusID       string `json:"campus_id"`
+	VenueID        string `json:"venue_id"`
+	IsLocked       bool   `json:"is_locked"`
+	IsStaged       bool   `json:"is_staged"`
+	StagedOrder    int    `json:"staged_order"`
 }
 
 func (s *ScheduledClass) UnmarshalJSON(data []byte) error {
