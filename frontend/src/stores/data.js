@@ -31,8 +31,11 @@ export const useDataStore = defineStore('data', () => {
     const time = ref([]);
     const day = ref([]);
     const isReverting = ref(false);
+    const isApplyingBackendData = ref(false);
     const isSolving = ref(false);
     const hasUnsavedChanges = ref(false);
+    const schedulePlans = ref([]);
+    const activeSchedulePlanId = ref(null);
 
     const courseVenues = ref([]);
     const teacherCourses = ref([]);
@@ -81,6 +84,21 @@ export const useDataStore = defineStore('data', () => {
         return Array.isArray(value) ? [...new Set(value.filter(Boolean))] : [];
     };
 
+    const normalizeSchedulePlan = (plan, defaults = {}) => ({
+        id: plan?.id || defaults.id || 'default-schedule-plan',
+        name: String(plan?.name || defaults.name || '默认课表'),
+        sort_order: integerOrDefault(plan?.sort_order, defaults.sort_order ?? 0)
+    });
+
+    const activeSchedulePlan = computed(() => {
+        return schedulePlans.value.find(plan => plan.id === activeSchedulePlanId.value) || schedulePlans.value[0] || null;
+    });
+
+    const schedulePlanOptions = computed(() => schedulePlans.value.map(plan => ({
+        label: plan.name,
+        value: plan.id
+    })));
+
     const normalizeCampusFilterView = (view, defaults = {}) => ({
         id: view?.id || defaults.id || uuidv4(),
         name: String(view?.name || defaults.name || '未命名视图'),
@@ -109,6 +127,7 @@ export const useDataStore = defineStore('data', () => {
 
         return {
             ...schedule,
+            schedule_plan_id: schedule?.schedule_plan_id || defaults.schedule_plan_id || activeSchedulePlanId.value || 'default-schedule-plan',
             is_locked: booleanOrDefault(schedule?.is_locked, defaults.is_locked ?? true),
             is_staged: isStaged,
             staged_order: isStaged ? stagedOrder : 0
@@ -266,6 +285,8 @@ export const useDataStore = defineStore('data', () => {
         console.log('Saving temp data to backend...');
         try {
             const rawData = {
+                schedule_plans: toRaw(data.schedulePlans ?? schedulePlans.value),
+                active_schedule_plan_id: data.activeSchedulePlanId ?? activeSchedulePlanId.value,
                 teachers: toRaw(data.teachers),
                 courses: toRaw(data.courses),
                 campuses: toRaw(data.campuses),
@@ -298,6 +319,8 @@ export const useDataStore = defineStore('data', () => {
         courseVenues: courseVenues.value,
         teacherCourses: teacherCourses.value,
         teacherCampuses: teacherCampuses.value,
+        schedulePlans: schedulePlans.value,
+        activeSchedulePlanId: activeSchedulePlanId.value,
         scheduledClasses: scheduledClasses.value,
         teacherUnavailability: teacherUnavailability.value,
         scheduleDensity: scheduleDensity.value,
@@ -349,7 +372,7 @@ export const useDataStore = defineStore('data', () => {
                     campusFilterViews: campusFilterViews.value
                 }),
                 (newState) => {
-                    if (!isInitialized.value || isReverting.value) return;
+                    if (!isInitialized.value || isReverting.value || isApplyingBackendData.value) return;
                     hasUnsavedChanges.value = true;
                     debouncedSave(newState);
                 },
@@ -371,7 +394,18 @@ export const useDataStore = defineStore('data', () => {
         courseVenues.value = newData.course_venues || [];
         teacherCourses.value = newData.teacher_courses || [];
         teacherCampuses.value = newData.teacher_campuses || [];
+        schedulePlans.value = (newData.schedule_plans || []).map((plan, index) => normalizeSchedulePlan(plan, {
+            sort_order: index
+        }));
+        if (schedulePlans.value.length === 0) {
+            schedulePlans.value = [normalizeSchedulePlan(null)];
+        }
+        const schedulePlanIds = new Set(schedulePlans.value.map(plan => plan.id));
+        activeSchedulePlanId.value = schedulePlanIds.has(newData.active_schedule_plan_id)
+            ? newData.active_schedule_plan_id
+            : schedulePlans.value[0].id;
         scheduledClasses.value = (newData.scheduled_classes || []).map(schedule => normalizeSchedule(schedule, {
+            schedule_plan_id: activeSchedulePlanId.value,
             is_locked: true,
             is_staged: false,
             staged_order: 0
@@ -381,6 +415,33 @@ export const useDataStore = defineStore('data', () => {
         campusFilterViews.value = (newData.campus_filter_views || []).map(view => normalizeCampusFilterView(view));
         syncUnsavedStatus();
     };
+
+    const applyBackendData = async (newData) => {
+        debouncedSave.cancel?.();
+        isApplyingBackendData.value = true;
+        try {
+            replaceAllData(newData);
+            clearScheduleFocus();
+            await syncUnsavedStatus();
+            await emit('data-reloaded');
+        } finally {
+            setTimeout(() => {
+                isApplyingBackendData.value = false;
+            }, 0);
+        }
+    };
+
+    const runSchedulePlanCommand = async (command, payload = {}) => {
+        const loadedData = await invoke(command, payload);
+        await applyBackendData(loadedData);
+        return loadedData;
+    };
+
+    const createSchedulePlan = (name) => runSchedulePlanCommand('create_schedule_plan', { name });
+    const copySchedulePlan = (name) => runSchedulePlanCommand('copy_schedule_plan', { name });
+    const switchSchedulePlan = (planId) => runSchedulePlanCommand('switch_schedule_plan', { planId });
+    const renameSchedulePlan = (planId, name) => runSchedulePlanCommand('rename_schedule_plan', { planId, name });
+    const deleteSchedulePlan = (planId) => runSchedulePlanCommand('delete_schedule_plan', { planId });
 
     const venuesByCampus = computed(() => (campusId) => {
         return venues.value.filter(v => v.campus_id === campusId);
@@ -397,6 +458,13 @@ export const useDataStore = defineStore('data', () => {
     const teacherCampusesByTeacher = computed(() => (teacherId) => {
         return teacherCampuses.value.filter(tc => tc.teacher_id === teacherId);
     });
+
+    const teacherCanTeachAtCampus = (teacherId, campusId) => {
+        if (!teacherId || !campusId) return false;
+        const teacherCampusRelations = teacherCampusesByTeacher.value(teacherId);
+        return teacherCampusRelations.length === 0
+            || teacherCampusRelations.some(relation => relation.campus_id === campusId);
+    };
 
     const scheduledClassesByTeacher = computed(() => (teacherId) => {
         return activeScheduledClasses.value.filter(sc => sc.teacher_id === teacherId);
@@ -790,14 +858,37 @@ export const useDataStore = defineStore('data', () => {
         const venueIds = courseVenueRelations.map(cv => cv.venue_id);
         const courseVenuesList = venues.value.filter(v => venueIds.includes(v.id));
         const courseCampusIds = new Set(courseVenuesList.map(v => v.campus_id));
-        const teacherCampusRelations = teacherId ? teacherCampusesByTeacher.value(teacherId) : [];
-        const allowedCampusIds = teacherId
-            ? new Set((teacherCampusRelations.length > 0 ? teacherCampusRelations : campuses.value.map(campus => ({ campus_id: campus.id }))).map(rel => rel.campus_id))
-            : null;
 
         return campuses.value
-            .filter(campus => courseCampusIds.has(campus.id) && (!allowedCampusIds || allowedCampusIds.has(campus.id)))
+            .filter(campus => courseCampusIds.has(campus.id) && (!teacherId || teacherCanTeachAtCampus(teacherId, campus.id)))
             .map(campus => ({ label: campus.name, value: campus.id }));
+    });
+
+    const campusCourseOptions = computed(() => (campusId, venueScope = null) => {
+        const scopedVenueIds = Array.isArray(venueScope)
+            ? venueScope.filter(Boolean)
+            : (venueScope ? [venueScope] : []);
+        const venueScopeIds = scopedVenueIds.length > 0 ? new Set(scopedVenueIds) : null;
+        const campusVenueIds = new Set(venues.value
+            .filter(venue => venue.campus_id === campusId && (!venueScopeIds || venueScopeIds.has(venue.id)))
+            .map(venue => venue.id));
+        const courseIds = new Set(courseVenues.value
+            .filter(relation => campusVenueIds.has(relation.venue_id))
+            .map(relation => relation.course_id));
+
+        return courses.value
+            .filter(course => courseIds.has(course.id))
+            .map(course => ({ label: course.name, value: course.id }));
+    });
+
+    const courseTeacherOptions = computed(() => (courseId, campusId = null) => {
+        const courseTeacherIds = new Set(teacherCourses.value
+            .filter(relation => relation.course_id === courseId)
+            .map(relation => relation.teacher_id));
+
+        return teachers.value
+            .filter(teacher => courseTeacherIds.has(teacher.id) && (!campusId || teacherCanTeachAtCampus(teacher.id, campusId)))
+            .map(teacher => ({ label: teacher.name, value: teacher.id }));
     });
 
     const courseVenueOptions = computed(() => (courseId, campusId) => {
@@ -1025,6 +1116,10 @@ export const useDataStore = defineStore('data', () => {
         venues,
         time,
         day,
+        schedulePlans,
+        activeSchedulePlanId,
+        activeSchedulePlan,
+        schedulePlanOptions,
         courseVenues,
         teacherCourses,
         teacherCampuses,
@@ -1047,6 +1142,11 @@ export const useDataStore = defineStore('data', () => {
         replaceAllData,
         revertChanges,
         commitChanges,
+        createSchedulePlan,
+        copySchedulePlan,
+        switchSchedulePlan,
+        renameSchedulePlan,
+        deleteSchedulePlan,
         hasUnsavedChanges,
         syncUnsavedStatus,
         flushPendingChanges,
@@ -1096,6 +1196,8 @@ export const useDataStore = defineStore('data', () => {
         getScheduledClassesByCampus,
         teacherCourseOptions,
         courseCampusOptions,
+        campusCourseOptions,
+        courseTeacherOptions,
         courseVenueOptions,
         addSchedule,
         updateSchedule,

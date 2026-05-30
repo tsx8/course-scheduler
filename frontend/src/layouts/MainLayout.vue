@@ -5,12 +5,58 @@
         </template>
         <n-layout class="app-shell">
             <n-layout-header
-                style="height: 48px; padding: 0 12px 0 24px; display: flex; align-items: center; justify-content: space-between; user-select: none; --wails-draggable: drag;"
+                class="app-titlebar"
                 bordered>
                 <h1 style="font-size: 1.2em; margin: 0; color: #333; user-select: none; --wails-draggable: drag;">
                     排课管理系统
                 </h1>
-                <div style="display: flex; align-items: center; gap: 12px; --wails-draggable: no-drag;">
+                <div class="app-titlebar__right">
+                    <div v-if="dataStore.isInitialized" class="schedule-plan-switcher">
+                        <span class="schedule-plan-switcher__label">课表版本</span>
+                        <n-select
+                            class="schedule-plan-switcher__select"
+                            :value="dataStore.activeSchedulePlanId"
+                            :options="dataStore.schedulePlanOptions"
+                            size="small"
+                            filterable
+                            :disabled="schedulePlanActionPending"
+                            @update:value="handleSchedulePlanSwitch"
+                        />
+                        <n-button-group>
+                            <n-tooltip>
+                                <template #trigger>
+                                    <n-button size="small" :disabled="schedulePlanActionPending" @click="openSchedulePlanModal('create')">
+                                        <template #icon><n-icon :component="AddIcon" /></template>
+                                    </n-button>
+                                </template>
+                                新建空白课表版本
+                            </n-tooltip>
+                            <n-tooltip>
+                                <template #trigger>
+                                    <n-button size="small" :disabled="schedulePlanActionPending" @click="openSchedulePlanModal('copy')">
+                                        <template #icon><n-icon :component="CopyIcon" /></template>
+                                    </n-button>
+                                </template>
+                                复制当前课表版本
+                            </n-tooltip>
+                            <n-tooltip>
+                                <template #trigger>
+                                    <n-button size="small" :disabled="schedulePlanActionPending" @click="openSchedulePlanModal('rename')">
+                                        <template #icon><n-icon :component="EditIcon" /></template>
+                                    </n-button>
+                                </template>
+                                重命名当前课表版本
+                            </n-tooltip>
+                            <n-tooltip>
+                                <template #trigger>
+                                    <n-button size="small" :disabled="schedulePlanActionPending || dataStore.schedulePlans.length <= 1" @click="confirmDeleteSchedulePlan">
+                                        <template #icon><n-icon :component="DeleteIcon" /></template>
+                                    </n-button>
+                                </template>
+                                {{ dataStore.schedulePlans.length <= 1 ? '不能删除最后一个课表版本' : '删除当前课表版本' }}
+                            </n-tooltip>
+                        </n-button-group>
+                    </div>
                     <n-button-group>
                         <n-button quaternary size="small" @click="minimizeWindow" title="最小化">
                             <template #icon><n-icon :component="MinimizeIcon" /></template>
@@ -47,6 +93,19 @@
                 </n-layout-content>
             </n-layout>
         </n-layout>
+        <n-modal v-model:show="schedulePlanModal.show" preset="dialog" :title="schedulePlanModalTitle" style="width: 420px;">
+            <n-form ref="schedulePlanFormRef" :model="schedulePlanForm" :rules="schedulePlanRules" @submit.prevent="submitSchedulePlanModal">
+                <n-form-item label="名称" path="name">
+                    <n-input v-model:value="schedulePlanForm.name" placeholder="输入课表版本名称" @keydown.enter.prevent="submitSchedulePlanModal" />
+                </n-form-item>
+                <div class="schedule-plan-modal__actions">
+                    <n-button :disabled="schedulePlanActionPending" @click="closeSchedulePlanModal">取消</n-button>
+                    <n-button type="primary" :loading="schedulePlanActionPending" @click="submitSchedulePlanModal">
+                        {{ schedulePlanSubmitText }}
+                    </n-button>
+                </div>
+            </n-form>
+        </n-modal>
     </n-spin>
 </template>
 
@@ -58,10 +117,15 @@ import { useScheduleDragStore } from '../stores/scheduleDrag';
 import ScheduleStagingTray from '../components/ScheduleStagingTray.vue';
 import {
     NLayout, NLayoutHeader, NLayoutSider, NLayoutContent, NMenu, NIcon,
-    NSpin, NButton, NButtonGroup, useDialog, useMessage
+    NSpin, NButton, NButtonGroup, NSelect, NTooltip, NModal, NForm, NFormItem,
+    NInput, useDialog, useMessage
 } from 'naive-ui';
 import {
+    AddOutline as AddIcon,
     BookOutline as BookIcon,
+    CopyOutline as CopyIcon,
+    CreateOutline as EditIcon,
+    TrashOutline as DeleteIcon,
     PeopleOutline as PeopleIcon,
     HomeOutline as HomeIcon,
     CalendarOutline as CalendarIcon,
@@ -92,6 +156,171 @@ let unlistenResize = null;
 let unlistenClose = null;
 
 const collapsed = ref(false);
+const schedulePlanActionPending = ref(false);
+const schedulePlanFormRef = ref(null);
+const schedulePlanForm = ref({ name: '' });
+const schedulePlanModal = ref({
+    show: false,
+    mode: 'create'
+});
+
+const schedulePlanRules = {
+    name: { required: true, message: '请输入课表版本名称', trigger: ['input', 'blur'] }
+};
+
+const schedulePlanModalTitle = computed(() => {
+    if (schedulePlanModal.value.mode === 'copy') return '复制课表版本';
+    if (schedulePlanModal.value.mode === 'rename') return '重命名课表版本';
+    return '新建课表版本';
+});
+
+const schedulePlanSubmitText = computed(() => {
+    if (schedulePlanModal.value.mode === 'copy') return '复制';
+    if (schedulePlanModal.value.mode === 'rename') return '保存';
+    return '新建';
+});
+
+const schedulePlanBlockedMessage = '请先保存或撤销未保存更改，再管理课表版本。';
+
+const errorMessage = (error) => error?.message || String(error);
+
+const uniqueSchedulePlanName = (preferredName) => {
+    const baseName = (preferredName || '新课表').trim() || '新课表';
+    const existingNames = new Set(dataStore.schedulePlans.map(plan => plan.name));
+    if (!existingNames.has(baseName)) return baseName;
+
+    let suffix = 2;
+    while (existingNames.has(`${baseName} ${suffix}`)) {
+        suffix += 1;
+    }
+    return `${baseName} ${suffix}`;
+};
+
+const defaultSchedulePlanName = (mode) => {
+    if (mode === 'copy') {
+        return uniqueSchedulePlanName(`${dataStore.activeSchedulePlan?.name || '当前课表'} 副本`);
+    }
+    if (mode === 'rename') {
+        return dataStore.activeSchedulePlan?.name || '';
+    }
+    return uniqueSchedulePlanName(`新课表 ${dataStore.schedulePlans.length + 1}`);
+};
+
+const ensureCanManageSchedulePlans = async () => {
+    await dataStore.syncUnsavedStatus();
+    if (dataStore.hasUnsavedChanges) {
+        message.warning(schedulePlanBlockedMessage);
+        return false;
+    }
+    return true;
+};
+
+const closeSchedulePlanModal = () => {
+    if (schedulePlanActionPending.value) return;
+    schedulePlanModal.value.show = false;
+};
+
+const openSchedulePlanModal = async (mode) => {
+    if (!(await ensureCanManageSchedulePlans())) return;
+    schedulePlanForm.value = { name: defaultSchedulePlanName(mode) };
+    schedulePlanModal.value = { show: true, mode };
+};
+
+const finishSchedulePlanNavigation = (successText) => {
+    dragStore.cancelDrag();
+    dataStore.clearScheduleFocus();
+    message.success(successText);
+};
+
+const submitSchedulePlanModal = async () => {
+    try {
+        await schedulePlanFormRef.value?.validate();
+    } catch {
+        return;
+    }
+
+    const name = String(schedulePlanForm.value.name || '').trim();
+    if (!name) {
+        message.error('请输入课表版本名称');
+        return;
+    }
+    if (!(await ensureCanManageSchedulePlans())) return;
+
+    schedulePlanActionPending.value = true;
+    try {
+        if (schedulePlanModal.value.mode === 'copy') {
+            await dataStore.copySchedulePlan(name);
+            finishSchedulePlanNavigation(`已复制并切换到课表版本「${dataStore.activeSchedulePlan?.name || name}」`);
+        } else if (schedulePlanModal.value.mode === 'rename') {
+            await dataStore.renameSchedulePlan(dataStore.activeSchedulePlanId, name);
+            finishSchedulePlanNavigation(`课表版本已重命名为「${dataStore.activeSchedulePlan?.name || name}」`);
+        } else {
+            await dataStore.createSchedulePlan(name);
+            finishSchedulePlanNavigation(`已新建并切换到课表版本「${dataStore.activeSchedulePlan?.name || name}」`);
+        }
+        schedulePlanModal.value.show = false;
+    } catch (error) {
+        dialog.error({
+            title: '课表版本操作失败',
+            content: errorMessage(error),
+            positiveText: '确定'
+        });
+    } finally {
+        schedulePlanActionPending.value = false;
+    }
+};
+
+const handleSchedulePlanSwitch = async (planId) => {
+    if (!planId || planId === dataStore.activeSchedulePlanId) return;
+    if (!(await ensureCanManageSchedulePlans())) return;
+
+    schedulePlanActionPending.value = true;
+    try {
+        await dataStore.switchSchedulePlan(planId);
+        finishSchedulePlanNavigation(`已切换到课表版本「${dataStore.activeSchedulePlan?.name || '未命名课表'}」`);
+    } catch (error) {
+        dialog.error({
+            title: '切换课表版本失败',
+            content: errorMessage(error),
+            positiveText: '确定'
+        });
+    } finally {
+        schedulePlanActionPending.value = false;
+    }
+};
+
+const confirmDeleteSchedulePlan = async () => {
+    if (dataStore.schedulePlans.length <= 1) {
+        message.warning('不能删除最后一个课表版本。');
+        return;
+    }
+    if (!(await ensureCanManageSchedulePlans())) return;
+
+    const plan = dataStore.activeSchedulePlan;
+    if (!plan) return;
+
+    dialog.warning({
+        title: '删除课表版本',
+        content: `确定删除课表版本「${plan.name}」吗？该版本内的排课记录会一起删除。`,
+        positiveText: '删除',
+        negativeText: '取消',
+        onPositiveClick: async () => {
+            schedulePlanActionPending.value = true;
+            try {
+                await dataStore.deleteSchedulePlan(plan.id);
+                finishSchedulePlanNavigation(`已删除课表版本「${plan.name}」，当前切换到「${dataStore.activeSchedulePlan?.name || '未命名课表'}」`);
+            } catch (error) {
+                dialog.error({
+                    title: '删除课表版本失败',
+                    content: errorMessage(error),
+                    positiveText: '确定'
+                });
+            } finally {
+                schedulePlanActionPending.value = false;
+            }
+        }
+    });
+};
 
 const handleResize = () => {
     const width = document.documentElement.clientWidth;
@@ -410,6 +639,65 @@ h1 {
     height: calc(100vh - 48px);
     min-height: 0;
     overflow: hidden;
+}
+
+.app-titlebar {
+    height: 48px;
+    padding: 0 12px 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    user-select: none;
+    --wails-draggable: drag;
+}
+
+.app-titlebar__right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    --wails-draggable: no-drag;
+}
+
+.schedule-plan-switcher {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.schedule-plan-switcher__label {
+    color: #606266;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.schedule-plan-switcher__select {
+    width: 220px;
+}
+
+.schedule-plan-modal__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+@media (max-width: 980px) {
+    .schedule-plan-switcher__label {
+        display: none;
+    }
+
+    .schedule-plan-switcher__select {
+        width: 168px;
+    }
+}
+
+@media (max-width: 760px) {
+    .schedule-plan-switcher {
+        display: none;
+    }
 }
 
 .main-layout__content {
